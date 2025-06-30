@@ -29,6 +29,7 @@ Configure your api keys and environment variables like the following.
 WORKSPACE_DIR="" # for the swarms library
 OPENAI_API_KEY="" # Your model api key
 GEMINI_API_KEY="" # your gemini api key
+ANTHROPIC_API_KEY=""
 ```
 
 ----
