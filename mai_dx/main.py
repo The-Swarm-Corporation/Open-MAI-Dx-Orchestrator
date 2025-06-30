@@ -1,8 +1,8 @@
 """
 MAI Diagnostic Orchestrator (MAI-DxO)
 
-This script provides a complete implementation of the "Sequential Diagnosis with Language Models" 
-paper, using the `swarms` framework. It simulates a virtual panel of physician-agents to perform 
+This script provides a complete implementation of the "Sequential Diagnosis with Language Models"
+paper, using the `swarms` framework. It simulates a virtual panel of physician-agents to perform
 iterative medical diagnosis with cost-effectiveness optimization.
 
 Based on the paper: "Sequential Diagnosis with Language Models"
@@ -20,20 +20,22 @@ Example Usage:
     # Standard MAI-DxO usage
     orchestrator = MaiDxOrchestrator(model_name="gemini/gemini-2.5-flash")
     result = orchestrator.run(initial_case_info, full_case_details, ground_truth)
-    
+
     # Budget-constrained variant
     budgeted_orchestrator = MaiDxOrchestrator.create_variant("budgeted", budget=5000)
-    
+
     # Ensemble approach
     ensemble_result = orchestrator.run_ensemble(initial_case_info, full_case_details, ground_truth)
 """
 
+# Enable debug mode if environment variable is set
+import os
 import json
 import sys
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union, Literal
+from typing import Any, Dict, List, Union, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -47,26 +49,27 @@ logger.add(
     sys.stdout,
     level="INFO",
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    colorize=True
+    colorize=True,
 )
 
-# Enable debug mode if environment variable is set
-import os
+
 if os.getenv("MAIDX_DEBUG", "").lower() in ("1", "true", "yes"):
     logger.add(
         "logs/maidx_debug_{time:YYYY-MM-DD}.log",
         level="DEBUG",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
         rotation="1 day",
-        retention="3 days"
+        retention="3 days",
     )
-    logger.info("🐛 Debug logging enabled - logs will be written to logs/ directory")
+    logger.info(
+        "🐛 Debug logging enabled - logs will be written to logs/ directory"
+    )
 
 # File handler for persistent logging (optional - uncomment if needed)
 # logger.add(
 #     "logs/mai_dxo_{time:YYYY-MM-DD}.log",
 #     rotation="1 day",
-#     retention="7 days", 
+#     retention="7 days",
 #     level="DEBUG",
 #     format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
 #     compression="zip"
@@ -74,8 +77,10 @@ if os.getenv("MAIDX_DEBUG", "").lower() in ("1", "true", "yes"):
 
 # --- Data Structures and Enums ---
 
+
 class AgentRole(Enum):
     """Enumeration of roles for the virtual physician panel."""
+
     HYPOTHESIS = "Dr. Hypothesis"
     TEST_CHOOSER = "Dr. Test-Chooser"
     CHALLENGER = "Dr. Challenger"
@@ -85,9 +90,11 @@ class AgentRole(Enum):
     GATEKEEPER = "Gatekeeper"
     JUDGE = "Judge"
 
+
 @dataclass
 class DiagnosisResult:
     """Stores the final result of a diagnostic session."""
+
     final_diagnosis: str
     ground_truth: str
     accuracy_score: float
@@ -96,13 +103,24 @@ class DiagnosisResult:
     iterations: int
     conversation_history: str
 
+
 class Action(BaseModel):
     """Pydantic model for a structured action decided by the consensus agent."""
-    action_type: Literal["ask", "test", "diagnose"] = Field(..., description="The type of action to perform.")
-    content: Union[str, List[str]] = Field(..., description="The content of the action (question, test name, or diagnosis).")
-    reasoning: str = Field(..., description="The reasoning behind choosing this action.")
+
+    action_type: Literal["ask", "test", "diagnose"] = Field(
+        ..., description="The type of action to perform."
+    )
+    content: Union[str, List[str]] = Field(
+        ...,
+        description="The content of the action (question, test name, or diagnosis).",
+    )
+    reasoning: str = Field(
+        ..., description="The reasoning behind choosing this action."
+    )
+
 
 # --- Main Orchestrator Class ---
+
 
 class MaiDxOrchestrator:
     """
@@ -110,6 +128,7 @@ class MaiDxOrchestrator:
     This class orchestrates a virtual panel of AI agents to perform sequential medical diagnosis,
     evaluates the final diagnosis, and tracks costs.
     """
+
     def __init__(
         self,
         model_name: str = "gemini/gemini-2.5-flash",
@@ -136,15 +155,13 @@ class MaiDxOrchestrator:
         self.mode = mode
         self.physician_visit_cost = physician_visit_cost
         self.enable_budget_tracking = enable_budget_tracking
-        
+
         self.cumulative_cost = 0
         self.differential_diagnosis = "Not yet formulated."
         self.conversation = Conversation(
-            time_enabled=True,
-            autosave=False,
-            save_enabled=False
+            time_enabled=True, autosave=False, save_enabled=False
         )
-        
+
         # Enhanced cost model based on the paper's methodology
         self.test_cost_db = {
             "default": 150,
@@ -177,7 +194,9 @@ class MaiDxOrchestrator:
         }
 
         self._init_agents()
-        logger.info(f"🏥 MAI Diagnostic Orchestrator initialized successfully in '{mode}' mode with budget ${initial_budget:,}")
+        logger.info(
+            f"🏥 MAI Diagnostic Orchestrator initialized successfully in '{mode}' mode with budget ${initial_budget:,}"
+        )
 
     def _init_agents(self):
         """Initializes all required agents with their specific roles and prompts."""
@@ -187,16 +206,22 @@ class MaiDxOrchestrator:
                 system_prompt=self._get_prompt_for_role(role),
                 model_name=self.model_name,
                 max_loops=1,
-                output_type="json" if role == AgentRole.CONSENSUS else "str",
+                output_type=(
+                    "json" if role == AgentRole.CONSENSUS else "str"
+                ),
                 print_on=True,  # Enable printing for all agents to see outputs
-            ) for role in AgentRole
+            )
+            for role in AgentRole
         }
-        logger.info(f"👥 {len(self.agents)} virtual physician agents initialized and ready for consultation")
+        logger.info(
+            f"👥 {len(self.agents)} virtual physician agents initialized and ready for consultation"
+        )
 
     def _get_prompt_for_role(self, role: AgentRole) -> str:
         """Returns the system prompt for a given agent role."""
         prompts = {
-            AgentRole.HYPOTHESIS: """
+            AgentRole.HYPOTHESIS: (
+                """
             You are Dr. Hypothesis, a specialist in maintaining differential diagnoses. Your role is critical to the diagnostic process.
 
             CORE RESPONSIBILITIES:
@@ -221,9 +246,10 @@ class MaiDxOrchestrator:
             - Evidence that contradicts or challenges each hypothesis
 
             Remember: Your differential drives the entire diagnostic process. Be thorough, evidence-based, and adaptive.
-            """,
-            
-            AgentRole.TEST_CHOOSER: """
+            """
+            ),
+            AgentRole.TEST_CHOOSER: (
+                """
             You are Dr. Test-Chooser, a specialist in diagnostic test selection and information theory.
 
             CORE RESPONSIBILITIES:
@@ -252,9 +278,10 @@ class MaiDxOrchestrator:
             - How results will change management decisions
 
             Focus on tests that will most efficiently narrow the differential diagnosis.
-            """,
-            
-            AgentRole.CHALLENGER: """
+            """
+            ),
+            AgentRole.CHALLENGER: (
+                """
             You are Dr. Challenger, the critical thinking specialist and devil's advocate.
 
             CORE RESPONSIBILITIES:
@@ -285,9 +312,10 @@ class MaiDxOrchestrator:
             - Red flags or concerning patterns that need attention
 
             Be constructively critical - your role is to strengthen diagnostic accuracy through rigorous challenge.
-            """,
-            
-            AgentRole.STEWARDSHIP: """
+            """
+            ),
+            AgentRole.STEWARDSHIP: (
+                """
             You are Dr. Stewardship, the resource optimization and cost-effectiveness specialist.
 
             CORE RESPONSIBILITIES:
@@ -323,9 +351,10 @@ class MaiDxOrchestrator:
             - Cumulative cost considerations
 
             Your goal: Maximum diagnostic accuracy at minimum necessary cost.
-            """,
-            
-            AgentRole.CHECKLIST: """
+            """
+            ),
+            AgentRole.CHECKLIST: (
+                """
             You are Dr. Checklist, the quality assurance and consistency specialist.
 
             CORE RESPONSIBILITIES:
@@ -356,9 +385,10 @@ class MaiDxOrchestrator:
             - Process improvement suggestions
 
             Keep your feedback concise but comprehensive. Flag any issues that could compromise diagnostic quality.
-            """,
-            
-            AgentRole.CONSENSUS: """
+            """
+            ),
+            AgentRole.CONSENSUS: (
+                """
             You are the Consensus Coordinator, responsible for synthesizing the virtual panel's expertise into a single, optimal decision.
 
             CORE RESPONSIBILITIES:
@@ -392,9 +422,10 @@ class MaiDxOrchestrator:
             For action_type "diagnose": content should be the complete, specific final diagnosis
 
             Make the decision that best advances accurate, cost-effective diagnosis.
-            """,
-            
-            AgentRole.GATEKEEPER: """
+            """
+            ),
+            AgentRole.GATEKEEPER: (
+                """
             You are the Gatekeeper, the clinical information oracle with complete access to the patient case file.
 
             CORE RESPONSIBILITIES:
@@ -431,9 +462,10 @@ class MaiDxOrchestrator:
             - Professional medical terminology
 
             Your role is crucial: provide complete, accurate clinical information while maintaining the challenge of the diagnostic process.
-            """,
-            
-            AgentRole.JUDGE: """
+            """
+            ),
+            AgentRole.JUDGE: (
+                """
             You are the Judge, the diagnostic accuracy evaluation specialist.
 
             CORE RESPONSIBILITIES:
@@ -489,9 +521,10 @@ class MaiDxOrchestrator:
 
             Maintain high standards while recognizing legitimate diagnostic variability in medical practice.
             """
+            ),
         }
         return prompts[role]
-    
+
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """Safely parses a JSON string, returning a dictionary."""
         try:
@@ -507,74 +540,93 @@ class MaiDxOrchestrator:
                         start_idx += len(start_marker)
                         end_idx = response.find(end_marker, start_idx)
                         if end_idx != -1:
-                            json_content = response[start_idx:end_idx].strip()
+                            json_content = response[
+                                start_idx:end_idx
+                            ].strip()
                             return json.loads(json_content)
-                
+
                 # Try to find JSON-like content in the response
-                lines = response.split('\n')
+                lines = response.split("\n")
                 json_lines = []
                 in_json = False
                 brace_count = 0
-                
+
                 for line in lines:
                     stripped_line = line.strip()
-                    if stripped_line.startswith('{') and not in_json:
+                    if stripped_line.startswith("{") and not in_json:
                         in_json = True
                         json_lines = [line]  # Start fresh
-                        brace_count = line.count('{') - line.count('}')
+                        brace_count = line.count("{") - line.count(
+                            "}"
+                        )
                     elif in_json:
                         json_lines.append(line)
-                        brace_count += line.count('{') - line.count('}')
-                        if brace_count <= 0:  # Balanced braces, end of JSON
+                        brace_count += line.count("{") - line.count(
+                            "}"
+                        )
+                        if (
+                            brace_count <= 0
+                        ):  # Balanced braces, end of JSON
                             break
-                
+
                 if json_lines and in_json:
-                    json_content = '\n'.join(json_lines)
+                    json_content = "\n".join(json_lines)
                     return json.loads(json_content)
-                
+
                 # Try to extract JSON from text that might contain other content
                 import re
+
                 # Look for JSON pattern in the text
-                json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-                matches = re.findall(json_pattern, response, re.DOTALL)
-                
+                json_pattern = r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"
+                matches = re.findall(
+                    json_pattern, response, re.DOTALL
+                )
+
                 for match in matches:
                     try:
                         return json.loads(match)
                     except json.JSONDecodeError:
                         continue
-                
+
                 # Direct parsing attempt as fallback
                 return json.loads(response)
-                
-        except (json.JSONDecodeError, IndexError, AttributeError) as e:
+
+        except (
+            json.JSONDecodeError,
+            IndexError,
+            AttributeError,
+        ) as e:
             logger.error(f"Failed to parse JSON response. Error: {e}")
-            logger.debug(f"Response content: {response[:500]}...")  # Log first 500 chars
+            logger.debug(
+                f"Response content: {response[:500]}..."
+            )  # Log first 500 chars
             # Fallback to a default action if parsing fails
             return {
                 "action_type": "ask",
-                "content": "Could you please clarify the next best step? The previous analysis was inconclusive.",
-                "reasoning": "Fallback due to parsing error."
+                "content": (
+                    "Could you please clarify the next best step? The previous analysis was inconclusive."
+                ),
+                "reasoning": "Fallback due to parsing error.",
             }
-        
+
     def _estimate_cost(self, tests: Union[List[str], str]) -> int:
         """Estimates the cost of diagnostic tests."""
         if isinstance(tests, str):
             tests = [tests]
-        
+
         cost = 0
         for test in tests:
             test_lower = test.lower().strip()
-            
+
             # Enhanced cost matching with multiple strategies
             cost_found = False
-            
+
             # Strategy 1: Exact match
             if test_lower in self.test_cost_db:
                 cost += self.test_cost_db[test_lower]
                 cost_found = True
                 continue
-            
+
             # Strategy 2: Partial match (find best matching key)
             best_match = None
             best_match_length = 0
@@ -583,56 +635,87 @@ class MaiDxOrchestrator:
                     if len(cost_key) > best_match_length:
                         best_match = cost_key
                         best_match_length = len(cost_key)
-            
+
             if best_match:
                 cost += self.test_cost_db[best_match]
                 cost_found = True
                 continue
-            
+
             # Strategy 3: Keyword-based matching
-            if any(keyword in test_lower for keyword in ['biopsy', 'tissue']):
-                cost += self.test_cost_db.get('biopsy', 800)
+            if any(
+                keyword in test_lower
+                for keyword in ["biopsy", "tissue"]
+            ):
+                cost += self.test_cost_db.get("biopsy", 800)
                 cost_found = True
-            elif any(keyword in test_lower for keyword in ['mri', 'magnetic']):
-                cost += self.test_cost_db.get('mri', 1500)
+            elif any(
+                keyword in test_lower
+                for keyword in ["mri", "magnetic"]
+            ):
+                cost += self.test_cost_db.get("mri", 1500)
                 cost_found = True
-            elif any(keyword in test_lower for keyword in ['ct', 'computed tomography']):
-                cost += self.test_cost_db.get('ct scan', 1200)
+            elif any(
+                keyword in test_lower
+                for keyword in ["ct", "computed tomography"]
+            ):
+                cost += self.test_cost_db.get("ct scan", 1200)
                 cost_found = True
-            elif any(keyword in test_lower for keyword in ['xray', 'x-ray', 'radiograph']):
-                cost += self.test_cost_db.get('chest x-ray', 200)
+            elif any(
+                keyword in test_lower
+                for keyword in ["xray", "x-ray", "radiograph"]
+            ):
+                cost += self.test_cost_db.get("chest x-ray", 200)
                 cost_found = True
-            elif any(keyword in test_lower for keyword in ['blood', 'serum', 'plasma']):
+            elif any(
+                keyword in test_lower
+                for keyword in ["blood", "serum", "plasma"]
+            ):
                 cost += 100  # Basic blood test cost
                 cost_found = True
-            elif any(keyword in test_lower for keyword in ['culture', 'sensitivity']):
-                cost += self.test_cost_db.get('culture', 150)
+            elif any(
+                keyword in test_lower
+                for keyword in ["culture", "sensitivity"]
+            ):
+                cost += self.test_cost_db.get("culture", 150)
                 cost_found = True
-            elif any(keyword in test_lower for keyword in ['immunohistochemistry', 'ihc']):
-                cost += self.test_cost_db.get('immunohistochemistry', 400)
+            elif any(
+                keyword in test_lower
+                for keyword in ["immunohistochemistry", "ihc"]
+            ):
+                cost += self.test_cost_db.get(
+                    "immunohistochemistry", 400
+                )
                 cost_found = True
-            
+
             # Strategy 4: Default cost for unknown tests
             if not cost_found:
-                cost += self.test_cost_db['default']
-                logger.debug(f"Using default cost for unknown test: {test}")
-        
+                cost += self.test_cost_db["default"]
+                logger.debug(
+                    f"Using default cost for unknown test: {test}"
+                )
+
         return cost
 
     def _run_panel_deliberation(self) -> Action:
         """Orchestrates one round of debate among the virtual panel to decide the next action."""
-        logger.info("🩺 Virtual medical panel deliberation commenced - analyzing patient case")
-        logger.debug("Panel members: Dr. Hypothesis, Dr. Test-Chooser, Dr. Challenger, Dr. Stewardship, Dr. Checklist")
-        panel_conversation = Conversation(
-            time_enabled=True,
-            autosave=False,
-            save_enabled=False
+        logger.info(
+            "🩺 Virtual medical panel deliberation commenced - analyzing patient case"
         )
-        
+        logger.debug(
+            "Panel members: Dr. Hypothesis, Dr. Test-Chooser, Dr. Challenger, Dr. Stewardship, Dr. Checklist"
+        )
+        panel_conversation = Conversation(
+            time_enabled=True, autosave=False, save_enabled=False
+        )
+
         # Prepare comprehensive panel context
         remaining_budget = self.initial_budget - self.cumulative_cost
-        budget_status = "EXCEEDED" if remaining_budget < 0 else f"${remaining_budget:,}"
-        
+        budget_status = (
+            "EXCEEDED"
+            if remaining_budget < 0
+            else f"${remaining_budget:,}"
+        )
+
         panel_context = f"""
         DIAGNOSTIC CASE STATUS - ROUND {len(self.conversation.return_history_as_string().split('Gatekeeper:')) - 1}
         
@@ -657,11 +740,17 @@ class MaiDxOrchestrator:
             # For instant mode, skip deliberation and go straight to diagnosis
             action_dict = {
                 "action_type": "diagnose",
-                "content": self.differential_diagnosis.split('\n')[0] if '\n' in self.differential_diagnosis else self.differential_diagnosis,
-                "reasoning": "Instant diagnosis mode - providing immediate assessment based on initial presentation"
+                "content": (
+                    self.differential_diagnosis.split("\n")[0]
+                    if "\n" in self.differential_diagnosis
+                    else self.differential_diagnosis
+                ),
+                "reasoning": (
+                    "Instant diagnosis mode - providing immediate assessment based on initial presentation"
+                ),
             }
             return Action(**action_dict)
-        
+
         if self.mode == "question_only":
             # For question-only mode, prevent test ordering
             panel_context += "\n\nIMPORTANT: This is QUESTION-ONLY mode. You may ONLY ask patient questions, not order diagnostic tests."
@@ -670,67 +759,127 @@ class MaiDxOrchestrator:
         # Sequential expert deliberation with enhanced methodology
         try:
             # Dr. Hypothesis - Differential diagnosis and probability assessment
-            logger.info("🧠 Dr. Hypothesis analyzing differential diagnosis...")
-            hypothesis = self.agents[AgentRole.HYPOTHESIS].run(panel_conversation.get_str())
-            self.differential_diagnosis = hypothesis  # Update main state
-            panel_conversation.add(self.agents[AgentRole.HYPOTHESIS].agent_name, hypothesis)
-            
+            logger.info(
+                "🧠 Dr. Hypothesis analyzing differential diagnosis..."
+            )
+            hypothesis = self.agents[AgentRole.HYPOTHESIS].run(
+                panel_conversation.get_str()
+            )
+            self.differential_diagnosis = (
+                hypothesis  # Update main state
+            )
+            panel_conversation.add(
+                self.agents[AgentRole.HYPOTHESIS].agent_name,
+                hypothesis,
+            )
+
             # Dr. Test-Chooser - Information value optimization
-            logger.info("🔬 Dr. Test-Chooser selecting optimal tests...")
-            test_choices = self.agents[AgentRole.TEST_CHOOSER].run(panel_conversation.get_str())
-            panel_conversation.add(self.agents[AgentRole.TEST_CHOOSER].agent_name, test_choices)
+            logger.info(
+                "🔬 Dr. Test-Chooser selecting optimal tests..."
+            )
+            test_choices = self.agents[AgentRole.TEST_CHOOSER].run(
+                panel_conversation.get_str()
+            )
+            panel_conversation.add(
+                self.agents[AgentRole.TEST_CHOOSER].agent_name,
+                test_choices,
+            )
 
             # Dr. Challenger - Bias identification and alternative hypotheses
-            logger.info("🤔 Dr. Challenger challenging assumptions...")
-            challenges = self.agents[AgentRole.CHALLENGER].run(panel_conversation.get_str())
-            panel_conversation.add(self.agents[AgentRole.CHALLENGER].agent_name, challenges)
+            logger.info(
+                "🤔 Dr. Challenger challenging assumptions..."
+            )
+            challenges = self.agents[AgentRole.CHALLENGER].run(
+                panel_conversation.get_str()
+            )
+            panel_conversation.add(
+                self.agents[AgentRole.CHALLENGER].agent_name,
+                challenges,
+            )
 
             # Dr. Stewardship - Cost-effectiveness analysis
-            logger.info("💰 Dr. Stewardship evaluating cost-effectiveness...")
+            logger.info(
+                "💰 Dr. Stewardship evaluating cost-effectiveness..."
+            )
             stewardship_context = panel_conversation.get_str()
             if self.enable_budget_tracking:
                 stewardship_context += f"\n\nBUDGET TRACKING ENABLED - Current cost: ${self.cumulative_cost}, Remaining: ${remaining_budget}"
-            stewardship_rec = self.agents[AgentRole.STEWARDSHIP].run(stewardship_context)
-            panel_conversation.add(self.agents[AgentRole.STEWARDSHIP].agent_name, stewardship_rec)
-            
+            stewardship_rec = self.agents[AgentRole.STEWARDSHIP].run(
+                stewardship_context
+            )
+            panel_conversation.add(
+                self.agents[AgentRole.STEWARDSHIP].agent_name,
+                stewardship_rec,
+            )
+
             # Dr. Checklist - Quality assurance
-            logger.info("✅ Dr. Checklist performing quality control...")
-            checklist_rep = self.agents[AgentRole.CHECKLIST].run(panel_conversation.get_str())
-            panel_conversation.add(self.agents[AgentRole.CHECKLIST].agent_name, checklist_rep)
-            
+            logger.info(
+                "✅ Dr. Checklist performing quality control..."
+            )
+            checklist_rep = self.agents[AgentRole.CHECKLIST].run(
+                panel_conversation.get_str()
+            )
+            panel_conversation.add(
+                self.agents[AgentRole.CHECKLIST].agent_name,
+                checklist_rep,
+            )
+
             # Consensus Coordinator - Final decision synthesis
-            logger.info("🤝 Consensus Coordinator synthesizing panel decision...")
+            logger.info(
+                "🤝 Consensus Coordinator synthesizing panel decision..."
+            )
             consensus_context = panel_conversation.get_str()
-            
+
             # Add mode-specific constraints to consensus
             if self.mode == "budgeted" and remaining_budget <= 0:
                 consensus_context += "\n\nBUDGET CONSTRAINT: Budget exceeded - must either ask questions or provide final diagnosis."
-            
-            consensus_response = self.agents[AgentRole.CONSENSUS].run(consensus_context)
-            logger.debug(f"Raw consensus response: {consensus_response}")
-            
+
+            consensus_response = self.agents[AgentRole.CONSENSUS].run(
+                consensus_context
+            )
+            logger.debug(
+                f"Raw consensus response: {consensus_response}"
+            )
+
             # Extract the actual text content from agent response
-            if hasattr(consensus_response, 'content'):
+            if hasattr(consensus_response, "content"):
                 response_text = consensus_response.content
             elif isinstance(consensus_response, str):
                 response_text = consensus_response
             else:
                 response_text = str(consensus_response)
-                
+
             action_dict = self._parse_json_response(response_text)
 
             # Validate action based on mode constraints
             action = Action(**action_dict)
-            if self.mode == "question_only" and action.action_type == "test":
-                logger.warning("Test ordering attempted in question-only mode, converting to ask action")
+            if (
+                self.mode == "question_only"
+                and action.action_type == "test"
+            ):
+                logger.warning(
+                    "Test ordering attempted in question-only mode, converting to ask action"
+                )
                 action.action_type = "ask"
                 action.content = "Can you provide more details about the patient's symptoms and history?"
-                action.reasoning = "Mode constraint: question-only mode active"
+                action.reasoning = (
+                    "Mode constraint: question-only mode active"
+                )
 
-            if self.mode == "budgeted" and action.action_type == "test" and remaining_budget <= 0:
-                logger.warning("Test ordering attempted with insufficient budget, converting to diagnose action")
+            if (
+                self.mode == "budgeted"
+                and action.action_type == "test"
+                and remaining_budget <= 0
+            ):
+                logger.warning(
+                    "Test ordering attempted with insufficient budget, converting to diagnose action"
+                )
                 action.action_type = "diagnose"
-                action.content = self.differential_diagnosis.split('\n')[0] if '\n' in self.differential_diagnosis else self.differential_diagnosis
+                action.content = (
+                    self.differential_diagnosis.split("\n")[0]
+                    if "\n" in self.differential_diagnosis
+                    else self.differential_diagnosis
+                )
                 action.reasoning = "Budget constraint: insufficient funds for additional testing"
 
             return action
@@ -741,13 +890,15 @@ class MaiDxOrchestrator:
             return Action(
                 action_type="ask",
                 content="Could you please provide more information about the patient's current condition?",
-                reasoning=f"Fallback due to panel deliberation error: {str(e)}"
+                reasoning=f"Fallback due to panel deliberation error: {str(e)}",
             )
 
-    def _interact_with_gatekeeper(self, action: Action, full_case_details: str) -> str:
+    def _interact_with_gatekeeper(
+        self, action: Action, full_case_details: str
+    ) -> str:
         """Sends the panel's action to the Gatekeeper and returns its response."""
         gatekeeper = self.agents[AgentRole.GATEKEEPER]
-        
+
         if action.action_type == "ask":
             request = f"Question: {action.content}"
         elif action.action_type == "test":
@@ -765,11 +916,13 @@ class MaiDxOrchestrator:
         Request from Diagnostic Agent:
         {request}
         """
-        
+
         response = gatekeeper.run(prompt)
         return response
 
-    def _judge_diagnosis(self, candidate_diagnosis: str, ground_truth: str) -> Dict[str, Any]:
+    def _judge_diagnosis(
+        self, candidate_diagnosis: str, ground_truth: str
+    ) -> Dict[str, Any]:
         """Uses the Judge agent to evaluate the final diagnosis."""
         judge = self.agents[AgentRole.JUDGE]
         prompt = f"""
@@ -778,18 +931,25 @@ class MaiDxOrchestrator:
         Candidate Diagnosis: "{candidate_diagnosis}"
         """
         response = judge.run(prompt)
-        
+
         # Simple parsing for demonstration; a more robust solution would use structured output.
         try:
-            score = float(response.split("Score:")[1].split("/")[0].strip())
+            score = float(
+                response.split("Score:")[1].split("/")[0].strip()
+            )
             reasoning = response.split("Justification:")[1].strip()
         except (IndexError, ValueError):
             score = 0.0
             reasoning = "Could not parse judge's response."
-            
+
         return {"score": score, "reasoning": reasoning}
 
-    def run(self, initial_case_info: str, full_case_details: str, ground_truth_diagnosis: str) -> DiagnosisResult:
+    def run(
+        self,
+        initial_case_info: str,
+        full_case_details: str,
+        ground_truth_diagnosis: str,
+    ) -> DiagnosisResult:
         """
         Executes the full sequential diagnostic process.
 
@@ -802,90 +962,152 @@ class MaiDxOrchestrator:
             DiagnosisResult: An object containing the final diagnosis, evaluation, cost, and history.
         """
         start_time = time.time()
-        self.conversation.add("Gatekeeper", f"Initial Case Information: {initial_case_info}")
-        
+        self.conversation.add(
+            "Gatekeeper",
+            f"Initial Case Information: {initial_case_info}",
+        )
+
         # Add initial physician visit cost
         self.cumulative_cost += self.physician_visit_cost
-        logger.info(f"Initial physician visit cost: ${self.physician_visit_cost}")
-        
+        logger.info(
+            f"Initial physician visit cost: ${self.physician_visit_cost}"
+        )
+
         final_diagnosis = None
         iteration_count = 0
-        
+
         for i in range(self.max_iterations):
             iteration_count = i + 1
-            logger.info(f"--- Starting Diagnostic Loop {iteration_count}/{self.max_iterations} ---")
-            logger.info(f"Current cost: ${self.cumulative_cost:,} | Remaining budget: ${self.initial_budget - self.cumulative_cost:,}")
-            
+            logger.info(
+                f"--- Starting Diagnostic Loop {iteration_count}/{self.max_iterations} ---"
+            )
+            logger.info(
+                f"Current cost: ${self.cumulative_cost:,} | Remaining budget: ${self.initial_budget - self.cumulative_cost:,}"
+            )
+
             try:
                 # Panel deliberates to decide on the next action
                 action = self._run_panel_deliberation()
-                logger.info(f"⚕️ Panel decision: {action.action_type.upper()} -> {action.content}")
-                logger.info(f"💭 Medical reasoning: {action.reasoning}")
-                
+                logger.info(
+                    f"⚕️ Panel decision: {action.action_type.upper()} -> {action.content}"
+                )
+                logger.info(
+                    f"💭 Medical reasoning: {action.reasoning}"
+                )
+
                 if action.action_type == "diagnose":
                     final_diagnosis = action.content
-                    logger.info(f"Final diagnosis proposed: {final_diagnosis}")
+                    logger.info(
+                        f"Final diagnosis proposed: {final_diagnosis}"
+                    )
                     break
 
                 # Handle mode-specific constraints
-                if self.mode == "question_only" and action.action_type == "test":
-                    logger.warning("Test ordering blocked in question-only mode")
+                if (
+                    self.mode == "question_only"
+                    and action.action_type == "test"
+                ):
+                    logger.warning(
+                        "Test ordering blocked in question-only mode"
+                    )
                     continue
-                    
-                if self.mode == "budgeted" and action.action_type == "test":
+
+                if (
+                    self.mode == "budgeted"
+                    and action.action_type == "test"
+                ):
                     # Check if we can afford the tests
-                    estimated_test_cost = self._estimate_cost(action.content)
-                    if self.cumulative_cost + estimated_test_cost > self.initial_budget:
-                        logger.warning(f"Test cost ${estimated_test_cost} would exceed budget. Skipping tests.")
+                    estimated_test_cost = self._estimate_cost(
+                        action.content
+                    )
+                    if (
+                        self.cumulative_cost + estimated_test_cost
+                        > self.initial_budget
+                    ):
+                        logger.warning(
+                            f"Test cost ${estimated_test_cost} would exceed budget. Skipping tests."
+                        )
                         continue
 
                 # Interact with the Gatekeeper
-                response = self._interact_with_gatekeeper(action, full_case_details)
+                response = self._interact_with_gatekeeper(
+                    action, full_case_details
+                )
                 self.conversation.add("Gatekeeper", response)
-                
+
                 # Update costs based on action type
                 if action.action_type == "test":
                     test_cost = self._estimate_cost(action.content)
                     self.cumulative_cost += test_cost
                     logger.info(f"Tests ordered: {action.content}")
-                    logger.info(f"Test cost: ${test_cost:,} | Cumulative cost: ${self.cumulative_cost:,}")
+                    logger.info(
+                        f"Test cost: ${test_cost:,} | Cumulative cost: ${self.cumulative_cost:,}"
+                    )
                 elif action.action_type == "ask":
                     # Questions are part of the same visit until tests are ordered
                     logger.info(f"Questions asked: {action.content}")
-                    logger.info(f"No additional cost for questions in same visit")
+                    logger.info(
+                        "No additional cost for questions in same visit"
+                    )
 
                 # Check budget constraints for budgeted mode
-                if self.mode == "budgeted" and self.cumulative_cost >= self.initial_budget:
-                    logger.warning("Budget limit reached. Forcing final diagnosis.")
+                if (
+                    self.mode == "budgeted"
+                    and self.cumulative_cost >= self.initial_budget
+                ):
+                    logger.warning(
+                        "Budget limit reached. Forcing final diagnosis."
+                    )
                     # Use current differential diagnosis or make best guess
-                    final_diagnosis = self.differential_diagnosis.split('\n')[0] if '\n' in self.differential_diagnosis else "Diagnosis not reached within budget constraints."
+                    final_diagnosis = (
+                        self.differential_diagnosis.split("\n")[0]
+                        if "\n" in self.differential_diagnosis
+                        else "Diagnosis not reached within budget constraints."
+                    )
                     break
-                    
+
             except Exception as e:
-                logger.error(f"Error in diagnostic loop {iteration_count}: {e}")
+                logger.error(
+                    f"Error in diagnostic loop {iteration_count}: {e}"
+                )
                 # Continue to next iteration or break if critical error
                 continue
-        
+
         else:
             # Max iterations reached without diagnosis
-            final_diagnosis = self.differential_diagnosis.split('\n')[0] if '\n' in self.differential_diagnosis else "Diagnosis not reached within maximum iterations."
-            logger.warning(f"Max iterations ({self.max_iterations}) reached. Using best available diagnosis.")
+            final_diagnosis = (
+                self.differential_diagnosis.split("\n")[0]
+                if "\n" in self.differential_diagnosis
+                else "Diagnosis not reached within maximum iterations."
+            )
+            logger.warning(
+                f"Max iterations ({self.max_iterations}) reached. Using best available diagnosis."
+            )
 
         # Ensure we have a final diagnosis
         if not final_diagnosis or final_diagnosis.strip() == "":
-            final_diagnosis = "Unable to determine diagnosis within constraints."
-            
+            final_diagnosis = (
+                "Unable to determine diagnosis within constraints."
+            )
+
         # Calculate total time
         total_time = time.time() - start_time
-        logger.info(f"Diagnostic session completed in {total_time:.2f} seconds")
+        logger.info(
+            f"Diagnostic session completed in {total_time:.2f} seconds"
+        )
 
         # Judge the final diagnosis
         logger.info("Evaluating final diagnosis...")
         try:
-            judgement = self._judge_diagnosis(final_diagnosis, ground_truth_diagnosis)
+            judgement = self._judge_diagnosis(
+                final_diagnosis, ground_truth_diagnosis
+            )
         except Exception as e:
             logger.error(f"Error in diagnosis evaluation: {e}")
-            judgement = {"score": 0.0, "reasoning": f"Evaluation error: {str(e)}"}
+            judgement = {
+                "score": 0.0,
+                "reasoning": f"Evaluation error: {str(e)}",
+            }
 
         # Create comprehensive result
         result = DiagnosisResult(
@@ -895,39 +1117,49 @@ class MaiDxOrchestrator:
             accuracy_reasoning=judgement["reasoning"],
             total_cost=self.cumulative_cost,
             iterations=iteration_count,
-            conversation_history=self.conversation.get_str()
+            conversation_history=self.conversation.get_str(),
         )
-        
-        logger.info(f"Diagnostic process completed:")
+
+        logger.info("Diagnostic process completed:")
         logger.info(f"  Final diagnosis: {final_diagnosis}")
         logger.info(f"  Ground truth: {ground_truth_diagnosis}")
         logger.info(f"  Accuracy score: {judgement['score']}/5.0")
         logger.info(f"  Total cost: ${self.cumulative_cost:,}")
         logger.info(f"  Iterations: {iteration_count}")
-        
+
         return result
-    
-    def run_ensemble(self, initial_case_info: str, full_case_details: str, ground_truth_diagnosis: str, num_runs: int = 3) -> DiagnosisResult:
+
+    def run_ensemble(
+        self,
+        initial_case_info: str,
+        full_case_details: str,
+        ground_truth_diagnosis: str,
+        num_runs: int = 3,
+    ) -> DiagnosisResult:
         """
         Runs multiple independent diagnostic sessions and aggregates the results.
-        
+
         Args:
             initial_case_info (str): The initial abstract of the case.
             full_case_details (str): The complete case file for the Gatekeeper.
             ground_truth_diagnosis (str): The correct final diagnosis for evaluation.
             num_runs (int): Number of independent runs to perform.
-            
+
         Returns:
             DiagnosisResult: Aggregated result from ensemble runs.
         """
-        logger.info(f"Starting ensemble run with {num_runs} independent sessions")
-        
+        logger.info(
+            f"Starting ensemble run with {num_runs} independent sessions"
+        )
+
         ensemble_results = []
         total_cost = 0
-        
+
         for run_id in range(num_runs):
-            logger.info(f"=== Ensemble Run {run_id + 1}/{num_runs} ===")
-            
+            logger.info(
+                f"=== Ensemble Run {run_id + 1}/{num_runs} ==="
+            )
+
             # Create a fresh orchestrator instance for each run
             run_orchestrator = MaiDxOrchestrator(
                 model_name=self.model_name,
@@ -935,38 +1167,52 @@ class MaiDxOrchestrator:
                 initial_budget=self.initial_budget,
                 mode="no_budget",  # Use no_budget for ensemble runs
                 physician_visit_cost=self.physician_visit_cost,
-                enable_budget_tracking=False
+                enable_budget_tracking=False,
             )
-            
+
             # Run the diagnostic session
-            result = run_orchestrator.run(initial_case_info, full_case_details, ground_truth_diagnosis)
+            result = run_orchestrator.run(
+                initial_case_info,
+                full_case_details,
+                ground_truth_diagnosis,
+            )
             ensemble_results.append(result)
             total_cost += result.total_cost
-            
-            logger.info(f"Run {run_id + 1} completed: {result.final_diagnosis} (Score: {result.accuracy_score})")
-        
+
+            logger.info(
+                f"Run {run_id + 1} completed: {result.final_diagnosis} (Score: {result.accuracy_score})"
+            )
+
         # Aggregate results using consensus
-        final_diagnosis = self._aggregate_ensemble_diagnoses([r.final_diagnosis for r in ensemble_results])
-        
+        final_diagnosis = self._aggregate_ensemble_diagnoses(
+            [r.final_diagnosis for r in ensemble_results]
+        )
+
         # Judge the aggregated diagnosis
-        judgement = self._judge_diagnosis(final_diagnosis, ground_truth_diagnosis)
-        
+        judgement = self._judge_diagnosis(
+            final_diagnosis, ground_truth_diagnosis
+        )
+
         # Calculate average metrics
-        avg_iterations = sum(r.iterations for r in ensemble_results) / len(ensemble_results)
-        
+        avg_iterations = sum(
+            r.iterations for r in ensemble_results
+        ) / len(ensemble_results)
+
         # Combine conversation histories
         combined_history = "\n\n=== ENSEMBLE RESULTS ===\n"
         for i, result in enumerate(ensemble_results):
             combined_history += f"\n--- Run {i+1} ---\n"
-            combined_history += f"Diagnosis: {result.final_diagnosis}\n"
+            combined_history += (
+                f"Diagnosis: {result.final_diagnosis}\n"
+            )
             combined_history += f"Score: {result.accuracy_score}\n"
             combined_history += f"Cost: ${result.total_cost:,}\n"
             combined_history += f"Iterations: {result.iterations}\n"
-        
-        combined_history += f"\n--- Aggregated Result ---\n"
+
+        combined_history += "\n--- Aggregated Result ---\n"
         combined_history += f"Final Diagnosis: {final_diagnosis}\n"
         combined_history += f"Reasoning: {judgement['reasoning']}\n"
-        
+
         ensemble_result = DiagnosisResult(
             final_diagnosis=final_diagnosis,
             ground_truth=ground_truth_diagnosis,
@@ -974,28 +1220,36 @@ class MaiDxOrchestrator:
             accuracy_reasoning=judgement["reasoning"],
             total_cost=total_cost,  # Sum of all runs
             iterations=int(avg_iterations),
-            conversation_history=combined_history
+            conversation_history=combined_history,
         )
-        
-        logger.info(f"Ensemble completed: {final_diagnosis} (Score: {judgement['score']})")
+
+        logger.info(
+            f"Ensemble completed: {final_diagnosis} (Score: {judgement['score']})"
+        )
         return ensemble_result
-    
-    def _aggregate_ensemble_diagnoses(self, diagnoses: List[str]) -> str:
+
+    def _aggregate_ensemble_diagnoses(
+        self, diagnoses: List[str]
+    ) -> str:
         """Aggregates multiple diagnoses from ensemble runs."""
         # Simple majority voting or use the most confident diagnosis
         if not diagnoses:
             return "No diagnosis available"
-        
+
         # Remove any empty or invalid diagnoses
-        valid_diagnoses = [d for d in diagnoses if d and d.strip() and "not reached" not in d.lower()]
-        
+        valid_diagnoses = [
+            d
+            for d in diagnoses
+            if d and d.strip() and "not reached" not in d.lower()
+        ]
+
         if not valid_diagnoses:
             return diagnoses[0] if diagnoses else "No valid diagnosis"
-        
+
         # If all diagnoses are the same, return that
         if len(set(valid_diagnoses)) == 1:
             return valid_diagnoses[0]
-        
+
         # Use an aggregator agent to select the best diagnosis
         try:
             aggregator_prompt = f"""
@@ -1008,32 +1262,35 @@ class MaiDxOrchestrator:
             Provide the single best diagnosis that represents the medical consensus. 
             Consider clinical accuracy, specificity, and completeness.
             """
-            
+
             aggregator = Agent(
                 agent_name="Ensemble Aggregator",
                 system_prompt=aggregator_prompt,
                 model_name=self.model_name,
                 max_loops=1,
-                print_on=True  # Enable printing for aggregator agent
+                print_on=True,  # Enable printing for aggregator agent
             )
-            
+
             return aggregator.run(aggregator_prompt).strip()
-            
+
         except Exception as e:
             logger.error(f"Error in ensemble aggregation: {e}")
             # Fallback to most common diagnosis
             from collections import Counter
+
             return Counter(valid_diagnoses).most_common(1)[0][0]
-    
+
     @classmethod
-    def create_variant(cls, variant: str, **kwargs) -> 'MaiDxOrchestrator':
+    def create_variant(
+        cls, variant: str, **kwargs
+    ) -> "MaiDxOrchestrator":
         """
         Factory method to create different MAI-DxO variants as described in the paper.
-        
+
         Args:
             variant (str): One of 'instant', 'question_only', 'budgeted', 'no_budget', 'ensemble'
             **kwargs: Additional parameters for the orchestrator
-            
+
         Returns:
             MaiDxOrchestrator: Configured orchestrator instance
         """
@@ -1041,49 +1298,55 @@ class MaiDxOrchestrator:
             "instant": {
                 "mode": "instant",
                 "max_iterations": 1,
-                "enable_budget_tracking": False
+                "enable_budget_tracking": False,
             },
             "question_only": {
                 "mode": "question_only",
                 "max_iterations": 10,
-                "enable_budget_tracking": False
+                "enable_budget_tracking": False,
             },
             "budgeted": {
                 "mode": "budgeted",
                 "max_iterations": 10,
                 "enable_budget_tracking": True,
-                "initial_budget": kwargs.get("budget", 5000)
+                "initial_budget": kwargs.get("budget", 5000),
             },
             "no_budget": {
                 "mode": "no_budget",
                 "max_iterations": 10,
-                "enable_budget_tracking": False
+                "enable_budget_tracking": False,
             },
             "ensemble": {
                 "mode": "no_budget",
                 "max_iterations": 10,
-                "enable_budget_tracking": False
-            }
+                "enable_budget_tracking": False,
+            },
         }
-        
+
         if variant not in variant_configs:
-            raise ValueError(f"Unknown variant: {variant}. Choose from: {list(variant_configs.keys())}")
-        
+            raise ValueError(
+                f"Unknown variant: {variant}. Choose from: {list(variant_configs.keys())}"
+            )
+
         config = variant_configs[variant]
         config.update(kwargs)  # Allow overrides
-        
+
         return cls(**config)
 
 
-def run_mai_dxo_demo(case_info: str = None, case_details: str = None, ground_truth: str = None) -> Dict[str, DiagnosisResult]:
+def run_mai_dxo_demo(
+    case_info: str = None,
+    case_details: str = None,
+    ground_truth: str = None,
+) -> Dict[str, DiagnosisResult]:
     """
     Convenience function to run a quick demonstration of MAI-DxO variants.
-    
+
     Args:
         case_info (str): Initial case information. Uses default if None.
         case_details (str): Full case details. Uses default if None.
         ground_truth (str): Ground truth diagnosis. Uses default if None.
-        
+
     Returns:
         Dict[str, DiagnosisResult]: Results from different MAI-DxO variants
     """
@@ -1093,7 +1356,7 @@ def run_mai_dxo_demo(case_info: str = None, case_details: str = None, ground_tru
             "A 29-year-old woman was admitted to the hospital because of sore throat and peritonsillar swelling "
             "and bleeding. Symptoms did not abate with antimicrobial therapy."
         )
-    
+
     if not case_details:
         case_details = """
         Patient: 29-year-old female.
@@ -1107,31 +1370,39 @@ def run_mai_dxo_demo(case_info: str = None, case_details: str = None, ground_tru
         Biopsy (FISH): No FOXO1 (13q14) rearrangements detected.
         Final Diagnosis from Pathology: Embryonal rhabdomyosarcoma of the pharynx.
         """
-    
+
     if not ground_truth:
         ground_truth = "Embryonal rhabdomyosarcoma of the pharynx"
-    
+
     results = {}
-    
+
     # Test key variants
     variants = ["no_budget", "budgeted", "question_only"]
-    
+
     for variant in variants:
         try:
             logger.info(f"Running MAI-DxO variant: {variant}")
-            
+
             if variant == "budgeted":
-                orchestrator = MaiDxOrchestrator.create_variant(variant, budget=3000, model_name="gemini/gemini-2.5-flash")
+                orchestrator = MaiDxOrchestrator.create_variant(
+                    variant,
+                    budget=3000,
+                    model_name="gemini/gemini-2.5-flash",
+                )
             else:
-                orchestrator = MaiDxOrchestrator.create_variant(variant, model_name="gemini/gemini-2.5-flash")
-            
-            result = orchestrator.run(case_info, case_details, ground_truth)
+                orchestrator = MaiDxOrchestrator.create_variant(
+                    variant, model_name="gemini/gemini-2.5-flash"
+                )
+
+            result = orchestrator.run(
+                case_info, case_details, ground_truth
+            )
             results[variant] = result
-            
+
         except Exception as e:
             logger.error(f"Error running variant {variant}: {e}")
             results[variant] = None
-    
+
     return results
 
 
@@ -1141,7 +1412,7 @@ if __name__ == "__main__":
         "A 29-year-old woman was admitted to the hospital because of sore throat and peritonsillar swelling "
         "and bleeding. Symptoms did not abate with antimicrobial therapy."
     )
-    
+
     full_case = """
     Patient: 29-year-old female.
     History: Onset of sore throat 7 weeks prior to admission. Worsening right-sided pain and swelling.
@@ -1155,55 +1426,65 @@ if __name__ == "__main__":
     Biopsy (FISH): No FOXO1 (13q14) rearrangements detected.
     Final Diagnosis from Pathology: Embryonal rhabdomyosarcoma of the pharynx.
     """
-    
+
     ground_truth = "Embryonal rhabdomyosarcoma of the pharynx"
-    
+
     # --- Demonstrate Different MAI-DxO Variants ---
     try:
-        print("\n" + "="*80)
-        print("    MAI DIAGNOSTIC ORCHESTRATOR (MAI-DxO) - SEQUENTIAL DIAGNOSIS BENCHMARK")
-        print("                    Implementation based on the NEJM Research Paper")
-        print("="*80)
-        
+        print("\n" + "=" * 80)
+        print(
+            "    MAI DIAGNOSTIC ORCHESTRATOR (MAI-DxO) - SEQUENTIAL DIAGNOSIS BENCHMARK"
+        )
+        print(
+            "                    Implementation based on the NEJM Research Paper"
+        )
+        print("=" * 80)
+
         # Test different variants as described in the paper
         variants_to_test = [
-            ("no_budget", "Standard MAI-DxO with no budget constraints"),
+            (
+                "no_budget",
+                "Standard MAI-DxO with no budget constraints",
+            ),
             ("budgeted", "Budget-constrained MAI-DxO ($3000 limit)"),
-            ("question_only", "Question-only variant (no diagnostic tests)"),
+            (
+                "question_only",
+                "Question-only variant (no diagnostic tests)",
+            ),
         ]
-        
+
         results = {}
-        
+
         for variant_name, description in variants_to_test:
             print(f"\n{'='*60}")
             print(f"Testing Variant: {variant_name.upper()}")
             print(f"Description: {description}")
-            print('='*60)
-            
+            print("=" * 60)
+
             # Create the variant
             if variant_name == "budgeted":
                 orchestrator = MaiDxOrchestrator.create_variant(
-                    variant_name, 
+                    variant_name,
                     budget=3000,
                     model_name="gemini/gemini-2.5-flash",
-                    max_iterations=5
+                    max_iterations=5,
                 )
             else:
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant_name,
-                    model_name="gemini/gemini-2.5-flash", 
-                    max_iterations=5
+                    model_name="gemini/gemini-2.5-flash",
+                    max_iterations=5,
                 )
-            
+
             # Run the diagnostic process
             result = orchestrator.run(
                 initial_case_info=initial_info,
                 full_case_details=full_case,
-                ground_truth_diagnosis=ground_truth
+                ground_truth_diagnosis=ground_truth,
             )
-            
+
             results[variant_name] = result
-            
+
             # Display results
             print(f"\n🚀 Final Diagnosis: {result.final_diagnosis}")
             print(f"🎯 Ground Truth: {result.ground_truth}")
@@ -1212,50 +1493,72 @@ if __name__ == "__main__":
             print(f"💰 Total Cost: ${result.total_cost:,}")
             print(f"🔄 Iterations: {result.iterations}")
             print(f"⏱️  Mode: {orchestrator.mode}")
-            
+
         # Demonstrate ensemble approach
         print(f"\n{'='*60}")
         print("Testing Variant: ENSEMBLE")
-        print("Description: Multiple independent runs with consensus aggregation")
-        print('='*60)
-        
+        print(
+            "Description: Multiple independent runs with consensus aggregation"
+        )
+        print("=" * 60)
+
         ensemble_orchestrator = MaiDxOrchestrator.create_variant(
             "ensemble",
             model_name="gemini/gemini-2.5-flash",
-            max_iterations=3  # Shorter iterations for ensemble
+            max_iterations=3,  # Shorter iterations for ensemble
         )
-        
+
         ensemble_result = ensemble_orchestrator.run_ensemble(
             initial_case_info=initial_info,
             full_case_details=full_case,
             ground_truth_diagnosis=ground_truth,
-            num_runs=2  # Reduced for demo
+            num_runs=2,  # Reduced for demo
         )
-        
+
         results["ensemble"] = ensemble_result
-        
-        print(f"\n🚀 Ensemble Diagnosis: {ensemble_result.final_diagnosis}")
+
+        print(
+            f"\n🚀 Ensemble Diagnosis: {ensemble_result.final_diagnosis}"
+        )
         print(f"🎯 Ground Truth: {ensemble_result.ground_truth}")
-        print(f"⭐ Ensemble Score: {ensemble_result.accuracy_score}/5.0")
-        print(f"💰 Total Ensemble Cost: ${ensemble_result.total_cost:,}")
-        
+        print(
+            f"⭐ Ensemble Score: {ensemble_result.accuracy_score}/5.0"
+        )
+        print(
+            f"💰 Total Ensemble Cost: ${ensemble_result.total_cost:,}"
+        )
+
         # --- Summary Comparison ---
         print(f"\n{'='*80}")
         print("                           RESULTS SUMMARY")
-        print('='*80)
-        print(f"{'Variant':<15} {'Diagnosis Match':<15} {'Score':<8} {'Cost':<12} {'Iterations':<12}")
-        print('-'*80)
-        
+        print("=" * 80)
+        print(
+            f"{'Variant':<15} {'Diagnosis Match':<15} {'Score':<8} {'Cost':<12} {'Iterations':<12}"
+        )
+        print("-" * 80)
+
         for variant_name, result in results.items():
-            match_status = "✓ Match" if result.accuracy_score >= 4.0 else "✗ No Match"
-            print(f"{variant_name:<15} {match_status:<15} {result.accuracy_score:<8.1f} ${result.total_cost:<11,} {result.iterations:<12}")
-        
+            match_status = (
+                "✓ Match"
+                if result.accuracy_score >= 4.0
+                else "✗ No Match"
+            )
+            print(
+                f"{variant_name:<15} {match_status:<15} {result.accuracy_score:<8.1f} ${result.total_cost:<11,} {result.iterations:<12}"
+            )
+
         print(f"\n{'='*80}")
-        print("Implementation successfully demonstrates the MAI-DxO framework")
-        print("as described in 'Sequential Diagnosis with Language Models' paper")
-        print('='*80)
+        print(
+            "Implementation successfully demonstrates the MAI-DxO framework"
+        )
+        print(
+            "as described in 'Sequential Diagnosis with Language Models' paper"
+        )
+        print("=" * 80)
 
     except Exception as e:
-        logger.exception(f"An error occurred during the diagnostic session: {e}")
+        logger.exception(
+            f"An error occurred during the diagnostic session: {e}"
+        )
         print(f"\n❌ Error occurred: {e}")
         print("Please check your model configuration and API keys.")
