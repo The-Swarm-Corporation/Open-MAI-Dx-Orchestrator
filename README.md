@@ -15,5 +15,21 @@ pip3 install mai-dx
 ...
 
 
+## Citation
+
+```bibtex
+@misc{nori2025sequentialdiagnosislanguagemodels,
+      title={Sequential Diagnosis with Language Models}, 
+      author={Harsha Nori and Mayank Daswani and Christopher Kelly and Scott Lundberg and Marco Tulio Ribeiro and Marc Wilson and Xiaoxuan Liu and Viknesh Sounderajah and Jonathan Carlson and Matthew P Lungren and Bay Gross and Peter Hames and Mustafa Suleyman and Dominic King and Eric Horvitz},
+      year={2025},
+      eprint={2506.22405},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2506.22405}, 
+}
+```
+
+
+
 # License
 MIT
