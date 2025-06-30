@@ -20,6 +20,19 @@ cd Open-MAI-Dx-Orchestrator
 pip install -e .
 ```
 
+---- 
+
+## Enivronement Configuration
+Configure your api keys and environment variables like the following. 
+
+```txt
+WORKSPACE_DIR="" # for the swarms library
+OPENAI_API_KEY="" # Your model api key
+GEMINI_API_KEY="" # your gemini api key
+```
+
+----
+
 ```python
 from mai_dx import MaiDxOrchestrator
 
