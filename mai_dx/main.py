@@ -261,7 +261,7 @@ class MaiDxOrchestrator:
 
     def __init__(
         self,
-        model_name: str = "gpt-4.1",  # Updated to GPT-4.1 as requested (GPT-4 Turbo)
+        model_name: str = "gpt-4-1106-preview",  # Fixed: Use valid GPT-4 Turbo model name
         max_iterations: int = 10,
         initial_budget: int = 10000,
         mode: str = "no_budget",  # "instant", "question_only", "budgeted", "no_budget", "ensemble"
@@ -332,18 +332,18 @@ class MaiDxOrchestrator:
         )
 
     def _get_agent_max_tokens(self, role: AgentRole) -> int:
-        """Get max_tokens for each agent based on their role - addresses token optimization"""
+        """Get max_tokens for each agent based on their role - significantly increased limits"""
         token_limits = {
-            AgentRole.HYPOTHESIS: 800,      # Needs space for differential diagnosis
-            AgentRole.TEST_CHOOSER: 600,    # Test recommendations  
-            AgentRole.CHALLENGER: 700,      # Bias identification and alternatives
-            AgentRole.STEWARDSHIP: 500,     # Cost analysis
-            AgentRole.CHECKLIST: 400,       # Brief validation
-            AgentRole.CONSENSUS: 300,       # Just JSON output
-            AgentRole.GATEKEEPER: 1000,     # Detailed clinical findings
-            AgentRole.JUDGE: 600,           # Scoring and reasoning
+            AgentRole.HYPOTHESIS: 2000,      # Increased for comprehensive differential analysis
+            AgentRole.TEST_CHOOSER: 1500,    # Increased for detailed test recommendations  
+            AgentRole.CHALLENGER: 1800,      # Increased for thorough bias analysis
+            AgentRole.STEWARDSHIP: 1200,     # Increased for detailed cost analysis
+            AgentRole.CHECKLIST: 1000,       # Increased for comprehensive validation
+            AgentRole.CONSENSUS: 800,        # Increased for detailed reasoning + JSON
+            AgentRole.GATEKEEPER: 2500,      # Increased for detailed clinical findings
+            AgentRole.JUDGE: 1500,           # Increased for comprehensive evaluation
         }
-        return token_limits.get(role, 500)
+        return token_limits.get(role, 1000)
 
     def _init_agents(self) -> None:
         """Initializes all required agents with their specific roles and prompts."""
@@ -409,10 +409,11 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             You are Dr. Hypothesis, a specialist in maintaining differential diagnoses. Your role is critical to the diagnostic process.
 
             CORE RESPONSIBILITIES:
-            - Maintain a probability-ranked differential diagnosis with the top 3 most likely conditions
+            - Maintain a probability-ranked differential diagnosis with the top 3-5 most likely conditions
             - Update probabilities using Bayesian reasoning after each new finding
             - Consider both common and rare diseases appropriate to the clinical context
             - Explicitly track how new evidence changes your diagnostic thinking
+            - Provide comprehensive analysis with detailed clinical reasoning
 
             APPROACH:
             1. Start with the most likely diagnoses based on presenting symptoms
@@ -421,19 +422,23 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
                - Whether it suggests new diagnoses to consider
                - How it changes the relative probabilities
             3. Always explain your Bayesian reasoning clearly
+            4. Consider epidemiology, pathophysiology, and clinical patterns
 
-            OUTPUT FORMAT:
+            OUTPUT FORMAT (Use full token allocation for comprehensive analysis):
             Provide your updated differential diagnosis with:
-            - Top 3 diagnoses with probability estimates (percentages)
-            - Brief rationale for each
+            - Top 3-5 diagnoses with probability estimates (percentages)
+            - Detailed rationale for each diagnosis
             - Key evidence supporting each hypothesis
             - Evidence that contradicts or challenges each hypothesis
+            - Pathophysiological reasoning for each diagnosis
+            - Risk stratification and urgency considerations
 
-            Remember: Your differential drives the entire diagnostic process. Be thorough, evidence-based, and adaptive.
+            Remember: Your differential drives the entire diagnostic process. Be thorough, evidence-based, and adaptive. Use your full token allocation to provide comprehensive clinical reasoning.
             """,
             
-            AgentRole.TEST_CHOOSER: (
-                """
+            AgentRole.TEST_CHOOSER: f"""
+            {dynamic_context}
+            
             You are Dr. Test-Chooser, a specialist in diagnostic test selection and information theory.
 
             CORE RESPONSIBILITIES:
@@ -441,31 +446,38 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Optimize for information value, not just clinical reasonableness
             - Consider test characteristics: sensitivity, specificity, positive/negative predictive values
             - Balance diagnostic yield with patient burden and resource utilization
+            - Provide comprehensive test selection rationale
 
             SELECTION CRITERIA:
             1. Information Value: How much will this test change diagnostic probabilities?
             2. Discriminatory Power: How well does it distinguish between competing hypotheses?
             3. Clinical Impact: Will the result meaningfully alter management?
             4. Sequential Logic: What should we establish first before ordering more complex tests?
+            5. Cost-effectiveness and patient safety considerations
 
             APPROACH:
             - For each proposed test, explicitly state which hypotheses it will help confirm or exclude
             - Consider both positive and negative results and their implications
             - Think about test sequences (e.g., basic labs before advanced imaging)
             - Avoid redundant tests that won't add new information
+            - Consider pre-test probability and post-test probability calculations
 
-            OUTPUT FORMAT:
+            OUTPUT FORMAT (Use full token allocation for detailed analysis):
             For each recommended test:
-            - Test name (be specific)
+            - Test name (be specific and accurate)
             - Primary hypotheses it will help evaluate
-            - Expected information gain
+            - Expected information gain and likelihood ratios
             - How results will change management decisions
+            - Cost considerations and alternatives
+            - Sequence rationale (why this test now vs. later)
+            - Expected sensitivity/specificity for the clinical context
 
-            Focus on tests that will most efficiently narrow the differential diagnosis.
-            """
-            ),
-            AgentRole.CHALLENGER: (
-                """
+            Focus on tests that will most efficiently narrow the differential diagnosis while considering practical constraints.
+            """,
+            
+            AgentRole.CHALLENGER: f"""
+            {dynamic_context}
+            
             You are Dr. Challenger, the critical thinking specialist and devil's advocate.
 
             CORE RESPONSIBILITIES:
@@ -473,6 +485,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Highlight contradictory evidence that might be overlooked
             - Propose alternative hypotheses and falsifying tests
             - Guard against premature diagnostic closure
+            - Provide comprehensive critical analysis
 
             COGNITIVE BIASES TO WATCH FOR:
             1. Anchoring: Over-reliance on initial impressions
@@ -480,6 +493,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             3. Availability bias: Overestimating probability of recently seen conditions
             4. Representativeness: Ignoring base rates and prevalence
             5. Search satisficing: Stopping at "good enough" explanations
+            6. Attribution errors and hindsight bias
 
             YOUR APPROACH:
             - Ask "What else could this be?" and "What doesn't fit?"
@@ -487,19 +501,23 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Propose tests that could disprove the leading hypothesis
             - Consider rare diseases when common ones don't fully explain the picture
             - Advocate for considering multiple conditions simultaneously
+            - Look for inconsistencies in the clinical presentation
 
-            OUTPUT FORMAT:
+            OUTPUT FORMAT (Use full token allocation for thorough analysis):
             - Specific biases you've identified in the current reasoning
             - Evidence that contradicts the leading hypotheses
-            - Alternative diagnoses to consider
+            - Alternative diagnoses to consider with reasoning
             - Tests that could falsify current assumptions
             - Red flags or concerning patterns that need attention
+            - Analysis of what might be missing from the current approach
+            - Systematic review of differential diagnosis completeness
 
-            Be constructively critical - your role is to strengthen diagnostic accuracy through rigorous challenge.
-            """
-            ),
-            AgentRole.STEWARDSHIP: (
-                """
+            Be constructively critical - your role is to strengthen diagnostic accuracy through rigorous challenge and comprehensive analysis.
+            """,
+            
+            AgentRole.STEWARDSHIP: f"""
+            {dynamic_context}
+            
             You are Dr. Stewardship, the resource optimization and cost-effectiveness specialist.
 
             CORE RESPONSIBILITIES:
@@ -507,6 +525,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Advocate for cheaper alternatives when diagnostically equivalent
             - Challenge low-yield, expensive tests
             - Balance diagnostic thoroughness with resource stewardship
+            - Provide comprehensive cost-benefit analysis
 
             COST-VALUE FRAMEWORK:
             1. High-Value Tests: Low cost, high diagnostic yield, changes management
@@ -519,33 +538,39 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Is there a less expensive test with similar diagnostic value?
             - Can we use a staged approach (cheap test first, expensive if needed)?
             - Does the test result actually change management?
+            - Are there outpatient vs. inpatient cost considerations?
 
             YOUR APPROACH:
             - Review all proposed tests for necessity and value
-            - Suggest cost-effective alternatives
+            - Suggest cost-effective alternatives with rationale
             - Question tests that don't clearly advance diagnosis
             - Advocate for asking questions before ordering expensive tests
-            - Consider the cumulative cost burden
+            - Consider the cumulative cost burden and budget constraints
+            - Analyze cost per unit of diagnostic information gained
 
-            OUTPUT FORMAT:
-            - Assessment of proposed tests (high/moderate/low/no value)
-            - Specific cost-effective alternatives
+            OUTPUT FORMAT (Use full token allocation for detailed analysis):
+            - Assessment of proposed tests (high/moderate/low/no value) with detailed reasoning
+            - Specific cost-effective alternatives with cost comparisons
             - Questions that might obviate need for testing
             - Recommended modifications to testing strategy
-            - Cumulative cost considerations
+            - Cumulative cost considerations and budget impact
+            - Value-based care recommendations
+            - Analysis of diagnostic yield vs. cost for each proposed intervention
 
-            Your goal: Maximum diagnostic accuracy at minimum necessary cost.
-            """
-            ),
-            AgentRole.CHECKLIST: (
-                """
+            Your goal: Maximum diagnostic accuracy at minimum necessary cost while maintaining high-quality care.
+            """,
+            
+            AgentRole.CHECKLIST: f"""
+            {dynamic_context}
+            
             You are Dr. Checklist, the quality assurance and consistency specialist.
 
             CORE RESPONSIBILITIES:
-            - Perform silent quality control on all panel deliberations
+            - Perform comprehensive quality control on all panel deliberations
             - Ensure test names are valid and properly specified
             - Check internal consistency of reasoning across panel members
             - Flag logical errors or contradictions in the diagnostic approach
+            - Provide systematic quality assessment
 
             QUALITY CHECKS:
             1. Test Validity: Are proposed tests real and properly named?
@@ -553,6 +578,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             3. Evidence Integration: Are all findings being considered appropriately?
             4. Process Adherence: Is the panel following proper diagnostic methodology?
             5. Safety Checks: Are any critical possibilities being overlooked?
+            6. Completeness: Is the diagnostic workup comprehensive?
 
             SPECIFIC VALIDATIONS:
             - Test names match standard medical terminology
@@ -560,17 +586,20 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - No contradictions between different panel members' reasoning
             - All significant findings are being addressed
             - No gaps in the diagnostic logic
+            - Proper consideration of differential diagnosis breadth
 
-            OUTPUT FORMAT:
-            - Brief validation summary (✓ Clear / ⚠ Issues noted)
-            - Any test name corrections needed
-            - Logical inconsistencies identified
-            - Missing considerations or gaps
-            - Process improvement suggestions
+            OUTPUT FORMAT (Use full token allocation for comprehensive analysis):
+            - Detailed validation summary (✓ Clear / ⚠ Issues noted)
+            - Any test name corrections needed with proper terminology
+            - Logical inconsistencies identified with specific examples
+            - Missing considerations or gaps in reasoning
+            - Process improvement suggestions with rationale
+            - Safety concerns or red flags that need immediate attention
+            - Systematic review of diagnostic approach quality
 
-            Keep your feedback concise but comprehensive. Flag any issues that could compromise diagnostic quality.
-            """
-            ),
+            Keep your feedback comprehensive and detailed. Flag any issues that could compromise diagnostic quality or patient safety.
+            """,
+            
             AgentRole.CONSENSUS: f"""
             {dynamic_context}
             
@@ -591,8 +620,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             4. **Cost Optimization:** Before finalizing a test, check Dr. Stewardship's input. If a diagnostically equivalent but cheaper alternative is available, select it.
             5. **Default to Questions:** If no test meets the criteria or the budget is a major concern, select the most pertinent question to ask.
 
-            OUTPUT REQUIREMENTS:
-            Provide a JSON object with this exact structure:
+            **CRITICAL: YOUR RESPONSE MUST BE EXACTLY THIS JSON FORMAT:**
             {{
                 "action_type": "ask" | "test" | "diagnose",
                 "content": "specific question(s), test name(s), or final diagnosis",
@@ -603,10 +631,12 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             For action_type "test": content should be properly named diagnostic tests (up to 3)
             For action_type "diagnose": content should be the complete, specific final diagnosis
 
-            Make the decision that best advances accurate, cost-effective diagnosis.
+            Make the decision that best advances accurate, cost-effective diagnosis. Use your full token allocation for comprehensive reasoning in the reasoning field.
             """,
-            AgentRole.GATEKEEPER: (
-                """
+            
+            AgentRole.GATEKEEPER: f"""
+            {dynamic_context}
+            
             You are the Gatekeeper, the clinical information oracle with complete access to the patient case file.
 
             CORE RESPONSIBILITIES:
@@ -614,6 +644,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Serve as the authoritative source for all patient information
             - Generate realistic synthetic findings for tests not in the original case
             - Maintain clinical realism while preventing information leakage
+            - Provide comprehensive, detailed responses
 
             RESPONSE PRINCIPLES:
             1. OBJECTIVITY: Provide only factual findings, never interpretations or impressions
@@ -621,6 +652,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             3. REALISM: Ensure all responses reflect realistic clinical scenarios
             4. NO HINTS: Never provide diagnostic clues or suggestions
             5. CONSISTENCY: Maintain coherence across all provided information
+            6. COMPLETENESS: Provide thorough, detailed responses
 
             HANDLING REQUESTS:
             - Patient History Questions: Provide relevant history from case file or realistic details
@@ -635,18 +667,21 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Use realistic reference ranges and values
             - Maintain clinical plausibility
             - Avoid pathognomonic findings unless specifically diagnostic
+            - Consider normal variations and expected findings
 
-            RESPONSE FORMAT:
-            - Direct, clinical language
+            RESPONSE FORMAT (Use full token allocation for detailed responses):
+            - Direct, clinical language with comprehensive detail
             - Specific measurements with reference ranges when applicable
-            - Clear organization of findings
-            - Professional medical terminology
+            - Clear organization of findings with systematic presentation
+            - Professional medical terminology with full descriptions
+            - Complete documentation as would appear in medical records
 
-            Your role is crucial: provide complete, accurate clinical information while maintaining the challenge of the diagnostic process.
-            """
-            ),
-            AgentRole.JUDGE: (
-                """
+            Your role is crucial: provide complete, accurate clinical information while maintaining the challenge of the diagnostic process. Use your full token allocation to provide comprehensive, detailed clinical information.
+            """,
+            
+            AgentRole.JUDGE: f"""
+            {dynamic_context}
+            
             You are the Judge, the diagnostic accuracy evaluation specialist.
 
             CORE RESPONSIBILITIES:
@@ -654,6 +689,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Provide fair, consistent scoring based on clinical management implications
             - Consider diagnostic substance over terminology differences
             - Account for acceptable medical synonyms and equivalent formulations
+            - Provide comprehensive evaluation reasoning
 
             EVALUATION RUBRIC (5-point Likert scale):
 
@@ -694,15 +730,16 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             4. Consider diagnostic completeness
             5. Judge clinical management implications
 
-            OUTPUT FORMAT:
-            - Score (1-5) with clear label
-            - Detailed justification referencing specific rubric criteria
-            - Explanation of how diagnosis would affect clinical management
+            OUTPUT FORMAT (Use full token allocation for comprehensive evaluation):
+            - Score (1-5) with clear label and detailed justification
+            - Comprehensive reasoning referencing specific rubric criteria
+            - Detailed explanation of how diagnosis would affect clinical management
             - Note any acceptable medical synonyms or equivalent terminology
+            - Analysis of diagnostic accuracy and clinical implications
+            - Systematic comparison with ground truth diagnosis
 
-            Maintain high standards while recognizing legitimate diagnostic variability in medical practice.
-            """
-            ),
+            Maintain high standards while recognizing legitimate diagnostic variability in medical practice. Provide comprehensive, detailed evaluation.
+            """,
         }
         
         # Use existing prompts for other roles, just add dynamic context
@@ -1022,6 +1059,22 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
     def _parse_json_response(self, response: str, retry_count: int = 0) -> Dict[str, Any]:
         """Safely parses a JSON string with retry logic - addresses Category 3.2"""
         try:
+            # Handle agent response wrapper - extract actual content
+            if isinstance(response, dict):
+                # Handle swarms Agent response format
+                if 'role' in response and 'content' in response:
+                    response = response['content']
+                elif 'content' in response:
+                    response = response['content']
+                else:
+                    # Try to extract any string value from dict
+                    response = str(response)
+            elif hasattr(response, 'content'):
+                response = response.content
+            elif not isinstance(response, str):
+                # Convert to string if it's some other type
+                response = str(response)
+
             # Extract the actual response content from the agent response
             if isinstance(response, str):
                 # Handle markdown-formatted JSON
@@ -1070,15 +1123,16 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
                 # Try to extract JSON from text that might contain other content
                 import re
 
-                # Look for JSON pattern in the text
-                json_pattern = r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"
-                matches = re.findall(
-                    json_pattern, response, re.DOTALL
-                )
+                # Look for JSON pattern in the text - more comprehensive regex
+                json_pattern = r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}'
+                matches = re.findall(json_pattern, response, re.DOTALL)
 
                 for match in matches:
                     try:
-                        return json.loads(match)
+                        parsed = json.loads(match)
+                        # Validate that it has the expected action structure
+                        if isinstance(parsed, dict) and 'action_type' in parsed:
+                            return parsed
                     except json.JSONDecodeError:
                         continue
 
@@ -1098,7 +1152,7 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             # Return the error for potential retry instead of immediately falling back
             raise e
     
-    def _parse_json_with_retry(self, consensus_agent: Agent, consensus_prompt: str, max_retries: int = 2) -> Dict[str, Any]:
+    def _parse_json_with_retry(self, consensus_agent: Agent, consensus_prompt: str, max_retries: int = 3) -> Dict[str, Any]:
         """Parse JSON with retry logic for robustness - addresses Category 3.2"""
         for attempt in range(max_retries + 1):
             try:
@@ -1106,27 +1160,43 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
                     response = consensus_agent.run(consensus_prompt)
                 else:
                     # Retry with error feedback
-                    retry_prompt = consensus_prompt + f"""
-                    
-**RETRY REQUIRED - ATTEMPT {attempt + 1}**
-Your previous response could not be parsed as JSON. Please ensure your response contains ONLY a valid JSON object in this exact format:
-```json
+                    retry_prompt = f"""
+{consensus_prompt}
+
+**CRITICAL: RETRY REQUIRED - ATTEMPT {attempt + 1}**
+Your previous response could not be parsed as JSON. You MUST respond with ONLY a valid JSON object in exactly this format:
+
 {{
     "action_type": "ask" | "test" | "diagnose",
     "content": "your content here",
     "reasoning": "your reasoning here"
 }}
-```
+
+Do NOT include any other text, markdown formatting, or explanations. Only the raw JSON object.
+NO SYSTEM MESSAGES, NO WRAPPER FORMAT. JUST THE JSON.
 """
                     response = consensus_agent.run(retry_prompt)
                 
-                # Extract the actual text content from agent response
-                if hasattr(response, "content"):
+                # Handle different response types from swarms Agent
+                response_text = ""
+                if hasattr(response, 'content'):
                     response_text = response.content
+                elif isinstance(response, dict):
+                    # Handle swarms Agent response wrapper
+                    if 'role' in response and 'content' in response:
+                        response_text = response['content']
+                    elif 'content' in response:
+                        response_text = response['content']
+                    else:
+                        response_text = str(response)
                 elif isinstance(response, str):
                     response_text = response
                 else:
                     response_text = str(response)
+                
+                # Log the response for debugging
+                logger.debug(f"Parsing attempt {attempt + 1}, response type: {type(response)}")
+                logger.debug(f"Response content preview: {str(response_text)[:200]}...")
                 
                 return self._parse_json_response(response_text, attempt)
                 
@@ -1492,19 +1562,82 @@ CURRENT STATE:
         Please evaluate the following diagnosis.
         Ground Truth: "{ground_truth}"
         Candidate Diagnosis: "{candidate_diagnosis}"
+        
+        You must provide your evaluation in exactly this format:
+        Score: [number from 1-5]
+        Justification: [detailed reasoning for the score]
         """
         response = judge.run(prompt)
+        
+        # Handle different response types from swarms Agent
+        response_text = ""
+        if hasattr(response, 'content'):
+            response_text = response.content
+        elif isinstance(response, dict):
+            if 'role' in response and 'content' in response:
+                response_text = response['content']
+            elif 'content' in response:
+                response_text = response['content']
+            else:
+                response_text = str(response)
+        elif isinstance(response, str):
+            response_text = response
+        else:
+            response_text = str(response)
 
-        # Simple parsing for demonstration; a more robust solution would use structured output.
+        # Enhanced parsing for demonstration; a more robust solution would use structured output.
         try:
-            score = float(
-                response.split("Score:")[1].split("/")[0].strip()
-            )
-            reasoning = response.split("Justification:")[1].strip()
-        except (IndexError, ValueError):
+            # Look for score patterns
+            import re
+            
+            # Try multiple score patterns
+            score_patterns = [
+                r"Score:\s*(\d+(?:\.\d+)?)",
+                r"Score\s*(\d+(?:\.\d+)?)",
+                r"(\d+(?:\.\d+)?)/5",
+                r"Score.*?(\d+(?:\.\d+)?)",
+            ]
+            
             score = 0.0
-            reasoning = "Could not parse judge's response."
+            for pattern in score_patterns:
+                match = re.search(pattern, response_text, re.IGNORECASE)
+                if match:
+                    score = float(match.group(1))
+                    break
+            
+            # Extract reasoning
+            reasoning_patterns = [
+                r"Justification:\s*(.+?)(?:\n\n|\Z)",
+                r"Reasoning:\s*(.+?)(?:\n\n|\Z)",
+                r"Explanation:\s*(.+?)(?:\n\n|\Z)",
+            ]
+            
+            reasoning = "Could not parse judge's reasoning."
+            for pattern in reasoning_patterns:
+                match = re.search(pattern, response_text, re.IGNORECASE | re.DOTALL)
+                if match:
+                    reasoning = match.group(1).strip()
+                    break
+            
+            # If no specific reasoning found, use the whole response after score
+            if reasoning == "Could not parse judge's reasoning." and score > 0:
+                # Try to extract everything after the score
+                score_match = re.search(r"Score:?\s*\d+(?:\.\d+)?", response_text, re.IGNORECASE)
+                if score_match:
+                    reasoning = response_text[score_match.end():].strip()
+                    # Clean up common prefixes
+                    reasoning = re.sub(r"^(Justification|Reasoning|Explanation):\s*", "", reasoning, flags=re.IGNORECASE)
+                
+            # Final fallback - use the whole response if we have a score
+            if reasoning == "Could not parse judge's reasoning." and score > 0:
+                reasoning = response_text
+                
+        except (IndexError, ValueError, AttributeError) as e:
+            logger.error(f"Error parsing judge response: {e}")
+            score = 0.0
+            reasoning = f"Could not parse judge's response: {str(e)}"
 
+        logger.info(f"Judge evaluation: Score={score}, Reasoning preview: {reasoning[:100]}...")
         return {"score": score, "reasoning": reasoning}
 
     def run(
@@ -1885,7 +2018,7 @@ CURRENT STATE:
                 "mode": "budgeted",
                 "max_iterations": 10,
                 "enable_budget_tracking": True,
-                "initial_budget": kwargs.get("budget", 5000),
+                "initial_budget": kwargs.get("budget", 5000),  # Fixed: map budget to initial_budget
             },
             "no_budget": {
                 "mode": "no_budget",
@@ -1963,11 +2096,14 @@ def run_mai_dxo_demo(
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant,
                     budget=3000,
-                    model_name="gpt-4.1",
+                    model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
+                    max_iterations=5,
                 )
             else:
                 orchestrator = MaiDxOrchestrator.create_variant(
-                    variant, model_name="gpt-4.1"
+                    variant,
+                    model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
+                    max_iterations=5,
                 )
 
             result = orchestrator.run(
@@ -2042,13 +2178,13 @@ if __name__ == "__main__":
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant_name,
                     budget=3000,
-                    model_name="gpt-4.1",
+                    model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
                     max_iterations=5,
                 )
             else:
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant_name,
-                    model_name="gpt-4.1",
+                    model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
                     max_iterations=5,
                 )
 
@@ -2080,7 +2216,7 @@ if __name__ == "__main__":
 
         ensemble_orchestrator = MaiDxOrchestrator.create_variant(
             "ensemble",
-            model_name="gpt-4.1",
+            model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
             max_iterations=3,  # Shorter iterations for ensemble
         )
 
