@@ -18,7 +18,7 @@ Key Features:
 
 Example Usage:
     # Standard MAI-DxO usage
-    orchestrator = MaiDxOrchestrator(model_name="gemini/gemini-2.5-flash")
+    orchestrator = MaiDxOrchestrator(model_name="gpt-4.1")
     result = orchestrator.run(initial_case_info, full_case_details, ground_truth)
 
     # Budget-constrained variant
@@ -131,7 +131,7 @@ class MaiDxOrchestrator:
 
     def __init__(
         self,
-        model_name: str = "gemini/gemini-2.5-flash",
+        model_name: str = "gpt-4.1",
         max_iterations: int = 10,
         initial_budget: int = 10000,
         mode: str = "no_budget",  # "instant", "question_only", "budgeted", "no_budget", "ensemble"
@@ -1387,11 +1387,11 @@ def run_mai_dxo_demo(
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant,
                     budget=3000,
-                    model_name="gemini/gemini-2.5-flash",
+                    model_name="gpt-4.1",
                 )
             else:
                 orchestrator = MaiDxOrchestrator.create_variant(
-                    variant, model_name="gemini/gemini-2.5-flash"
+                    variant, model_name="gpt-4.1"
                 )
 
             result = orchestrator.run(
@@ -1466,13 +1466,13 @@ def run_mai_dxo_demo(
 #                 orchestrator = MaiDxOrchestrator.create_variant(
 #                     variant_name,
 #                     budget=3000,
-#                     model_name="gemini/gemini-2.5-flash",
+#                     model_name="gpt-4.1",
 #                     max_iterations=5,
 #                 )
 #             else:
 #                 orchestrator = MaiDxOrchestrator.create_variant(
 #                     variant_name,
-#                     model_name="gemini/gemini-2.5-flash",
+#                     model_name="gpt-4.1",
 #                     max_iterations=5,
 #                 )
 
@@ -1504,7 +1504,7 @@ def run_mai_dxo_demo(
 
 #         ensemble_orchestrator = MaiDxOrchestrator.create_variant(
 #             "ensemble",
-#             model_name="gemini/gemini-2.5-flash",
+#             model_name="gpt-4.1",
 #             max_iterations=3,  # Shorter iterations for ensemble
 #         )
 

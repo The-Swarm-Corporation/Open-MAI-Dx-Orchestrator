@@ -1,20 +1,6 @@
-"""
-MAI Diagnostic Orchestrator (MAI-DxO)
-
-An AI-powered diagnostic system that simulates a virtual panel of physician-agents
-for medical diagnosis. Based on Microsoft Research's "Sequential Diagnosis with 
-Language Models" paper.
-
-Key Components:
-- MaiDxOrchestrator: Main orchestrator class
-- DiagnosisResult: Result container with diagnosis, accuracy, and cost
-- Action: Action model for panel decisions
-- AgentRole: Enumeration of physician agent roles
-"""
-
 from typing import Any, Optional
 
-from .main import (
+from mai_dx.main import (
     MaiDxOrchestrator,
     DiagnosisResult,
     Action,
@@ -24,7 +10,6 @@ from .main import (
 
 __version__ = "1.0.0"
 __author__ = "The Swarm Corporation"
-__email__ = "kye@apac.ai"
 __description__ = "AI-powered diagnostic system with virtual physician panels"
 
 # Main exports
