@@ -1137,7 +1137,40 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
                         continue
 
                 # Direct parsing attempt as fallback
-                return json.loads(response)
+                try:
+                    return json.loads(response)
+                except json.JSONDecodeError:
+                    # --- Fallback Sanitization ---
+                    # Attempt to strip any leading table/frame characters (e.g., │, ╭, ╰) that may wrap each line
+                    try:
+                        # Extract everything between the first '{' and last '}'
+                        start_curly = response.index('{')
+                        end_curly = response.rindex('}')
+                        candidate = response[start_curly:end_curly + 1]
+                        sanitized_lines = []
+                        for line in candidate.splitlines():
+                            # Remove common frame characters and leading whitespace
+                            line = line.lstrip('│|╭╰╯├─┤ ').rstrip('│|╭╰╯├─┤ ')
+                            sanitized_lines.append(line)
+                        candidate_clean = '\n'.join(sanitized_lines)
+                        return json.loads(candidate_clean)
+                    except Exception as inner_e:
+                        # Still failing, raise original error to trigger retry logic
+                        try:
+                            # --- Ultimate Fallback: Regex extraction ---
+                            import re
+                            atype = re.search(r'"action_type"\s*:\s*"(ask|test|diagnose)"', response, re.IGNORECASE)
+                            content_match = re.search(r'"content"\s*:\s*"([^"]+?)"', response, re.IGNORECASE | re.DOTALL)
+                            reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]+?)"', response, re.IGNORECASE | re.DOTALL)
+                            if atype and content_match and reasoning_match:
+                                return {
+                                    "action_type": atype.group(1).lower(),
+                                    "content": content_match.group(1).strip(),
+                                    "reasoning": reasoning_match.group(1).strip(),
+                                }
+                        except Exception:
+                            pass
+                        raise e
 
         except (
             json.JSONDecodeError,
