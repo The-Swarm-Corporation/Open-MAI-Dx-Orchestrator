@@ -198,7 +198,7 @@ class MaiDxOrchestrator:
             f"🏥 MAI Diagnostic Orchestrator initialized successfully in '{mode}' mode with budget ${initial_budget:,}"
         )
 
-    def _init_agents(self):
+    def _init_agents(self) -> None:
         """Initializes all required agents with their specific roles and prompts."""
         self.agents = {
             role: Agent(

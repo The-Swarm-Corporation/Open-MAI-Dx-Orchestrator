@@ -1,46 +1,26 @@
-# Open-MAI-Dx-Orchestrator
+# MAI Diagnostic Orchestrator (MAI-DxO)
 
-> **An open-source implementation of the "Sequential Diagnosis with Language Models" paper by Microsoft Research, built with the Swarms AI framework.**
+> **AI-powered diagnostic system that simulates a virtual panel of physician-agents for medical diagnosis**
 
 [![Paper](https://img.shields.io/badge/Paper-arXiv:2506.22405-red.svg)](https://arxiv.org/abs/2506.22405)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.8+-green.svg)](https://python.org)
 
-MAI-DxO (MAI Diagnostic Orchestrator) is a sophisticated AI-powered diagnostic system that simulates a virtual panel of physician-agents to perform iterative medical diagnosis with cost-effectiveness optimization. This implementation faithfully reproduces the methodology described in the Microsoft Research paper while providing additional features and flexibility.
+An open-source implementation of Microsoft Research's "Sequential Diagnosis with Language Models" paper, built with the Swarms AI framework.
 
 ## 🚀 Quick Start
 
 ```bash
-# Install the package
-pip install mai-dx
-
-# Or install from source
 git clone https://github.com/The-Swarm-Corporation/Open-MAI-Dx-Orchestrator.git
 cd Open-MAI-Dx-Orchestrator
-pip install -e .
+pip install -r requirements.txt
 ```
-
----- 
-
-## Enivronement Configuration
-Configure your api keys and environment variables like the following. 
-
-```txt
-WORKSPACE_DIR="" # for the swarms library
-OPENAI_API_KEY="" # Your model api key
-GEMINI_API_KEY="" # your gemini api key
-ANTHROPIC_API_KEY=""
-```
-
-----
-
-## Example
 
 ```python
 from mai_dx import MaiDxOrchestrator
 
 # Create orchestrator
-orchestrator = MaiDxOrchestrator(model_name="gemini/gemini-2.5-flash")
+orchestrator = MaiDxOrchestrator()
 
 # Run diagnosis
 result = orchestrator.run(
@@ -54,53 +34,89 @@ print(f"Accuracy: {result.accuracy_score}/5.0")
 print(f"Cost: ${result.total_cost:,}")
 ```
 
---- 
+## ✨ Key Features
 
-## Documentation
+- **8 AI Physician Agents**: Specialized roles for comprehensive diagnosis
+- **5 Operational Modes**: instant, question-only, budgeted, no-budget, ensemble
+- **Cost Tracking**: Real-time budget monitoring with 25+ medical test costs
+- **Clinical Evaluation**: 5-point accuracy scoring with detailed feedback
+- **Model Agnostic**: Works with GPT, Gemini, Claude, and other LLMs
 
-Learn more about this repository [with the docs](DOCS.md)
+## 🏥 Virtual Physician Panel
+
+- **🧠 Dr. Hypothesis**: Maintains differential diagnosis with probabilities
+- **🔬 Dr. Test-Chooser**: Selects optimal diagnostic tests
+- **🤔 Dr. Challenger**: Prevents cognitive biases and diagnostic errors
+- **💰 Dr. Stewardship**: Ensures cost-effective care decisions
+- **✅ Dr. Checklist**: Quality control and consistency checks
+- **🤝 Consensus Coordinator**: Synthesizes panel decisions
+- **🔑 Gatekeeper**: Clinical information oracle
+- **⚖️ Judge**: Evaluates diagnostic accuracy
+
+## 📋 Usage Modes
+
+```python
+# Instant diagnosis (emergency triage)
+orchestrator = MaiDxOrchestrator.create_variant("instant")
+
+# Budget-constrained diagnosis
+orchestrator = MaiDxOrchestrator.create_variant("budgeted", budget=3000)
+
+# Question-only mode (telemedicine)
+orchestrator = MaiDxOrchestrator.create_variant("question_only")
+
+# Full diagnostic capability
+orchestrator = MaiDxOrchestrator.create_variant("no_budget")
+
+# Ensemble approach (multiple panels)
+result = orchestrator.run_ensemble(case_info, case_details, ground_truth, num_runs=3)
+```
+
+## 🛠 Configuration
+
+```python
+orchestrator = MaiDxOrchestrator(
+    model_name="gemini/gemini-2.5-flash",  # or "gpt-4", "claude-3-5-sonnet"
+    max_iterations=10,
+    initial_budget=10000,
+    mode="no_budget"
+)
+```
+
+## 📚 Documentation
+
+- **[Complete Documentation](docs.md)** - Detailed API reference and examples
+- **[Example Usage](example.py)** - Ready-to-run examples
+- **[Original Paper](https://arxiv.org/abs/2506.22405)** - Microsoft Research paper
+
+## 🎯 Example Results
+
+```
+=== MAI-DxO Diagnostic Results ===
+Variant: no_budget
+Final Diagnosis: Embryonal rhabdomyosarcoma of the pharynx
+Ground Truth: Embryonal rhabdomyosarcoma of the pharynx
+Accuracy Score: 5.0/5.0
+Total Cost: $4,650
+Iterations: 4
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Please check our issues and submit pull requests.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 📚 Citation
 
-If you use this implementation in your research, please cite both the original paper and this implementation:
-
 ```bibtex
 @misc{nori2025sequentialdiagnosislanguagemodels,
-    title={Sequential Diagnosis with Language Models}, 
-    author={Harsha Nori and Mayank Daswani and Christopher Kelly and Scott Lundberg and Marco Tulio Ribeiro and Marc Wilson and Xiaoxuan Liu and Viknesh Sounderajah and Jonathan Carlson and Matthew P Lungren and Bay Gross and Peter Hames and Mustafa Suleyman and Dominic King and Eric Horvitz},
-    year={2025},
-    eprint={2506.22405},
-    archivePrefix={arXiv},
-    primaryClass={cs.CL},
-    url={https://arxiv.org/abs/2506.22405}, 
-}
-
-@software{mai_dx_orchestrator,
-    title={Open-MAI-Dx-Orchestrator: An Open Source Implementation of Sequential Diagnosis with Language Models},
-    author={The-Swarm-Corporation},
-    year={2025},
-    url={https://github.com/The-Swarm-Corporation/Open-MAI-Dx-Orchestrator.git}
+      title={Sequential Diagnosis with Language Models}, 
+      author={Harsha Nori and others},
+      year={2025},
+      eprint={2506.22405},
+      archivePrefix={arXiv}
 }
 ```
-
-## 🔗 Related Work
-
-- [Original Paper](https://arxiv.org/abs/2506.22405) - Sequential Diagnosis with Language Models
-- [Swarms Framework](https://github.com/kyegomez/swarms) - Multi-agent AI orchestration
-- [Microsoft Research](https://www.microsoft.com/en-us/research/) - Original research institution
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/The-Swarm-Corporation/Open-MAI-Dx-Orchestrator/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/The-Swarm-Corporation/Open-MAI-Dx-Orchestrator/discussions)
-- **Documentation**: [Full Documentation](https://docs.swarms.world)
-
----
-
-<p align="center">
-  <strong>Built with Swarms for advancing AI-powered medical diagnosis</strong>
-</p>
