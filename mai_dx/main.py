@@ -182,40 +182,34 @@ class DeliberationState:
     retry_count: int = 0
     
     def to_consensus_prompt(self) -> str:
-        """Generate a structured prompt for the consensus coordinator"""
+        """Generate a structured prompt for the consensus coordinator - no truncation, let agent self-regulate"""
+        
         prompt = f"""
-You are the Consensus Coordinator. Here is the summary of the panel's deliberation for this turn:
+You are the Consensus Coordinator. Here is the panel's analysis:
 
-**Current Differential Diagnosis (from Dr. Hypothesis):**
-{self.hypothesis_analysis}
+**Differential Diagnosis (Dr. Hypothesis):**
+{self.hypothesis_analysis or 'Not yet formulated'}
 
-**Recommended Tests (from Dr. Test-Chooser):**
-{self.test_chooser_analysis}
+**Test Recommendations (Dr. Test-Chooser):**
+{self.test_chooser_analysis or 'None provided'}
 
-**Identified Biases & Challenges (from Dr. Challenger):**
-{self.challenger_analysis}
+**Critical Challenges (Dr. Challenger):**
+{self.challenger_analysis or 'None identified'}
 
-**Cost & Stewardship Concerns (from Dr. Stewardship):**
-{self.stewardship_analysis}
+**Cost Assessment (Dr. Stewardship):**
+{self.stewardship_analysis or 'Not evaluated'}
 
-**Quality Control Assessment (from Dr. Checklist):**
-{self.checklist_analysis}
+**Quality Control (Dr. Checklist):**
+{self.checklist_analysis or 'No issues noted'}
 """
         
         if self.stagnation_detected:
-            prompt += f"""
-**CRITICAL INTERVENTION: STAGNATION DETECTED**
-The panel is stalled. You MUST propose a different and more decisive action. 
-If you cannot find a new test or question, you must move to a final diagnosis.
-"""
+            prompt += "\n**STAGNATION DETECTED** - The panel is repeating actions. You MUST make a decisive choice or provide final diagnosis."
         
         if self.situational_context:
-            prompt += f"""
-**SITUATIONAL CONTEXT:**
-{self.situational_context}
-"""
+            prompt += f"\n**Situational Context:** {self.situational_context}"
         
-        prompt += "\nBased on this synthesized input, provide your single best action in the required JSON format."
+        prompt += "\n\nBased on this comprehensive panel input, use the make_consensus_decision function to provide your structured action."
         return prompt
 
 
@@ -261,12 +255,13 @@ class MaiDxOrchestrator:
 
     def __init__(
         self,
-        model_name: str = "gpt-4-1106-preview",  # Fixed: Use valid GPT-4 Turbo model name
+        model_name: str = "gpt-4.1",  # Fixed: Use valid GPT-4 Turbo model name
         max_iterations: int = 10,
         initial_budget: int = 10000,
         mode: str = "no_budget",  # "instant", "question_only", "budgeted", "no_budget", "ensemble"
         physician_visit_cost: int = 300,
         enable_budget_tracking: bool = False,
+        request_delay: float = 8.0,  # seconds to wait between model calls to mitigate rate-limits
     ):
         """
         Initializes the MAI-DxO system with improved architecture.
@@ -278,6 +273,7 @@ class MaiDxOrchestrator:
             mode (str): The operational mode of MAI-DxO.
             physician_visit_cost (int): Cost per physician visit.
             enable_budget_tracking (bool): Whether to enable budget tracking.
+            request_delay (float): Seconds to wait between model calls to mitigate rate-limits.
         """
         self.model_name = model_name
         self.max_iterations = max_iterations
@@ -285,6 +281,12 @@ class MaiDxOrchestrator:
         self.mode = mode
         self.physician_visit_cost = physician_visit_cost
         self.enable_budget_tracking = enable_budget_tracking
+
+        # Throttle settings to avoid OpenAI TPM rate-limits
+        self.request_delay = max(request_delay, 0)
+        
+        # Token management
+        self.max_total_tokens_per_request = 25000  # Safety margin below 30k limit
 
         self.cumulative_cost = 0
         self.differential_diagnosis = "Not yet formulated."
@@ -332,35 +334,175 @@ class MaiDxOrchestrator:
         )
 
     def _get_agent_max_tokens(self, role: AgentRole) -> int:
-        """Get max_tokens for each agent based on their role - significantly increased limits"""
+        """Get max_tokens for each agent based on their role - agents will self-regulate based on token guidance"""
         token_limits = {
-            AgentRole.HYPOTHESIS: 2000,      # Increased for comprehensive differential analysis
-            AgentRole.TEST_CHOOSER: 1500,    # Increased for detailed test recommendations  
-            AgentRole.CHALLENGER: 1800,      # Increased for thorough bias analysis
-            AgentRole.STEWARDSHIP: 1200,     # Increased for detailed cost analysis
-            AgentRole.CHECKLIST: 1000,       # Increased for comprehensive validation
-            AgentRole.CONSENSUS: 800,        # Increased for detailed reasoning + JSON
-            AgentRole.GATEKEEPER: 2500,      # Increased for detailed clinical findings
-            AgentRole.JUDGE: 1500,           # Increased for comprehensive evaluation
+            # Reasonable limits - agents will adjust their verbosity based on token guidance
+            AgentRole.HYPOTHESIS: 1200,   # Function calling keeps this structured, but allow room for quality
+            AgentRole.TEST_CHOOSER: 800,  # Need space for test rationale
+            AgentRole.CHALLENGER: 800,    # Need space for critical analysis
+            AgentRole.STEWARDSHIP: 600,
+            AgentRole.CHECKLIST: 400,
+            AgentRole.CONSENSUS: 500,     # Function calling is efficient
+            AgentRole.GATEKEEPER: 1000,  # Needs to provide detailed clinical findings
+            AgentRole.JUDGE: 700,
         }
-        return token_limits.get(role, 1000)
+        return token_limits.get(role, 600)
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """Rough token estimation (1 token ≈ 4 characters for English)"""
+        return len(text) // 4
+    
+    def _generate_token_guidance(self, input_tokens: int, max_output_tokens: int, total_tokens: int, agent_role: AgentRole) -> str:
+        """Generate dynamic token guidance for agents to self-regulate their responses"""
+        
+        # Determine urgency level based on token usage
+        if total_tokens > self.max_total_tokens_per_request:
+            urgency = "CRITICAL"
+            strategy = "Be extremely concise. Prioritize only the most essential information."
+        elif total_tokens > self.max_total_tokens_per_request * 0.8:
+            urgency = "HIGH"
+            strategy = "Be concise and focus on key points. Avoid elaborate explanations."
+        elif total_tokens > self.max_total_tokens_per_request * 0.6:
+            urgency = "MODERATE"
+            strategy = "Be reasonably concise while maintaining necessary detail."
+        else:
+            urgency = "LOW"
+            strategy = "You can provide detailed analysis within your allocated tokens."
+        
+        # Role-specific guidance
+        role_specific_guidance = {
+            AgentRole.HYPOTHESIS: "Focus on top 2-3 diagnoses with probabilities. Prioritize summary over detailed pathophysiology.",
+            AgentRole.TEST_CHOOSER: "Recommend 1-2 highest-yield tests. Focus on which hypotheses they'll help differentiate.",
+            AgentRole.CHALLENGER: "Identify 1-2 most critical biases or alternative diagnoses. Be direct and specific.",
+            AgentRole.STEWARDSHIP: "Focus on cost-effectiveness assessment. Recommend cheaper alternatives where applicable.",
+            AgentRole.CHECKLIST: "Provide concise quality check. Flag critical issues only.",
+            AgentRole.CONSENSUS: "Function calling enforces structure. Focus on clear reasoning.",
+            AgentRole.GATEKEEPER: "Provide specific clinical findings. Be factual and complete but not verbose.",
+            AgentRole.JUDGE: "Provide score and focused justification. Be systematic but concise."
+        }.get(agent_role, "Be concise and focused.")
+        
+        guidance = f"""
+[TOKEN MANAGEMENT - {urgency} PRIORITY]
+Input: {input_tokens} tokens | Your Output Limit: {max_output_tokens} tokens | Total: {total_tokens} tokens
+Strategy: {strategy}
+Role Focus: {role_specific_guidance}
+
+IMPORTANT: Adjust your response length and detail level based on this guidance. Prioritize the most critical information for your role.
+"""
+        
+        return guidance
 
     def _init_agents(self) -> None:
         """Initializes all required agents with their specific roles and prompts."""
-        self.agents = {
-            role: Agent(
-                agent_name=role.value,
-                system_prompt=self._get_prompt_for_role(role),
-                model_name=self.model_name,
-                max_loops=1,
-                output_type=(
-                    "json" if role == AgentRole.CONSENSUS else "str"
-                ),
-                print_on=True,  # Enable printing for all agents to see outputs
-                max_tokens=self._get_agent_max_tokens(role),  # Role-specific token limits
-            )
-            for role in AgentRole
+        
+        # Define the structured output tool for consensus decisions
+        consensus_tool = {
+            "type": "function",
+            "function": {
+                "name": "make_consensus_decision",
+                "description": "Make a structured consensus decision for the next diagnostic action",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action_type": {
+                            "type": "string",
+                            "enum": ["ask", "test", "diagnose"],
+                            "description": "The type of action to perform"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The specific content of the action (question, test name, or diagnosis)"
+                        },
+                        "reasoning": {
+                            "type": "string",
+                            "description": "The detailed reasoning behind this decision, synthesizing panel input"
+                        }
+                    },
+                    "required": ["action_type", "content", "reasoning"]
+                }
+            }
         }
+        
+        # Define structured output tool for differential diagnosis
+        hypothesis_tool = {
+            "type": "function",
+            "function": {
+                "name": "update_differential_diagnosis",
+                "description": "Update the differential diagnosis with structured probabilities and reasoning",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {
+                            "type": "string",
+                            "description": "One-sentence summary of primary diagnostic conclusion and confidence"
+                        },
+                        "differential_diagnoses": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "diagnosis": {"type": "string", "description": "The diagnosis name"},
+                                    "probability": {"type": "number", "minimum": 0, "maximum": 1, "description": "Probability as decimal (0.0-1.0)"},
+                                    "rationale": {"type": "string", "description": "Brief rationale for this diagnosis"}
+                                },
+                                "required": ["diagnosis", "probability", "rationale"]
+                            },
+                            "minItems": 2,
+                            "maxItems": 5,
+                            "description": "Top 2-5 differential diagnoses with probabilities"
+                        },
+                        "key_evidence": {
+                            "type": "string",
+                            "description": "Key supporting evidence for leading hypotheses"
+                        },
+                        "contradictory_evidence": {
+                            "type": "string", 
+                            "description": "Critical contradictory evidence that must be addressed"
+                        }
+                    },
+                    "required": ["summary", "differential_diagnoses", "key_evidence"]
+                }
+            }
+        }
+        
+        self.agents = {}
+        for role in AgentRole:
+            if role == AgentRole.CONSENSUS:
+                # Use function calling for consensus agent to ensure structured output
+                self.agents[role] = Agent(
+                    agent_name=role.value,
+                    system_prompt=self._get_prompt_for_role(role),
+                    model_name=self.model_name,
+                    max_loops=1,
+                    tools_list_dictionary=[consensus_tool],  # swarms expects tools_list_dictionary
+                    tool_choice="auto",  # Let the model choose to use the tool
+                    print_on=True,
+                    max_tokens=self._get_agent_max_tokens(role),
+                )
+            elif role == AgentRole.HYPOTHESIS:
+                # Use function calling for hypothesis agent to ensure structured differential
+                self.agents[role] = Agent(
+                    agent_name=role.value,
+                    system_prompt=self._get_prompt_for_role(role),
+                    model_name=self.model_name,
+                    max_loops=1,
+                    tools_list_dictionary=[hypothesis_tool],
+                    tool_choice="auto",
+                    print_on=True,
+                    max_tokens=self._get_agent_max_tokens(role),
+                )
+            else:
+                # Regular agents without function calling
+                self.agents[role] = Agent(
+                    agent_name=role.value,
+                    system_prompt=self._get_prompt_for_role(role),
+                    model_name=self.model_name,
+                    max_loops=1,
+                    output_type="str",
+                    print_on=True,
+                    max_tokens=self._get_agent_max_tokens(role),
+                )
+        
         logger.info(
             f"👥 {len(self.agents)} virtual physician agents initialized and ready for consultation"
         )
@@ -424,16 +566,16 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             3. Always explain your Bayesian reasoning clearly
             4. Consider epidemiology, pathophysiology, and clinical patterns
 
-            OUTPUT FORMAT (Use full token allocation for comprehensive analysis):
-            Provide your updated differential diagnosis with:
-            - Top 3-5 diagnoses with probability estimates (percentages)
-            - Detailed rationale for each diagnosis
-            - Key evidence supporting each hypothesis
-            - Evidence that contradicts or challenges each hypothesis
-            - Pathophysiological reasoning for each diagnosis
-            - Risk stratification and urgency considerations
+            **IMPORTANT: You MUST use the update_differential_diagnosis function to provide your structured analysis.**
+            
+            Use the function to provide:
+            - A one-sentence summary of your primary diagnostic conclusion and confidence level
+            - Your top 2-5 differential diagnoses with probability estimates (as decimals: 0.0-1.0)
+            - Brief rationale for each diagnosis
+            - Key supporting evidence for leading hypotheses  
+            - Critical contradictory evidence that must be addressed
 
-            Remember: Your differential drives the entire diagnostic process. Be thorough, evidence-based, and adaptive. Use your full token allocation to provide comprehensive clinical reasoning.
+            Remember: Your differential drives the entire diagnostic process. Provide clear probabilities and reasoning.
             """,
             
             AgentRole.TEST_CHOOSER: f"""
@@ -462,17 +604,20 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Avoid redundant tests that won't add new information
             - Consider pre-test probability and post-test probability calculations
 
-            OUTPUT FORMAT (Use full token allocation for detailed analysis):
-            For each recommended test:
+            OUTPUT FORMAT (You have a response limit of {self._get_agent_max_tokens(AgentRole.TEST_CHOOSER)} tokens - prioritize actionable recommendations):
+            
+            **SUMMARY FIRST:** Lead with your single most recommended test and why it's the highest priority.
+            
+            **DETAILED RECOMMENDATIONS (up to 3 tests):**
+            For each test:
             - Test name (be specific and accurate)
             - Primary hypotheses it will help evaluate
-            - Expected information gain and likelihood ratios
-            - How results will change management decisions
-            - Cost considerations and alternatives
-            - Sequence rationale (why this test now vs. later)
-            - Expected sensitivity/specificity for the clinical context
+            - Expected information gain
+            - How results will change management
+            - Cost-effectiveness assessment
+            - Timing rationale
 
-            Focus on tests that will most efficiently narrow the differential diagnosis while considering practical constraints.
+            Focus on tests that will most efficiently narrow the differential diagnosis.
             """,
             
             AgentRole.CHALLENGER: f"""
@@ -503,16 +648,19 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             - Advocate for considering multiple conditions simultaneously
             - Look for inconsistencies in the clinical presentation
 
-            OUTPUT FORMAT (Use full token allocation for thorough analysis):
-            - Specific biases you've identified in the current reasoning
-            - Evidence that contradicts the leading hypotheses
-            - Alternative diagnoses to consider with reasoning
-            - Tests that could falsify current assumptions
-            - Red flags or concerning patterns that need attention
-            - Analysis of what might be missing from the current approach
-            - Systematic review of differential diagnosis completeness
+            OUTPUT FORMAT (You have a response limit of {self._get_agent_max_tokens(AgentRole.CHALLENGER)} tokens - focus on the most critical challenges):
+            
+            **SUMMARY FIRST:** State your primary concern with the current diagnostic approach in one sentence.
+            
+            **CRITICAL CHALLENGES:**
+            - Most significant bias identified in current reasoning
+            - Key evidence that contradicts leading hypotheses
+            - Most important alternative diagnosis to consider
+            - Essential test to falsify current assumptions
+            - Highest priority red flag or safety concern
+            - Most critical gap in current approach
 
-            Be constructively critical - your role is to strengthen diagnostic accuracy through rigorous challenge and comprehensive analysis.
+            Be constructively critical - focus on the challenges that most impact diagnostic accuracy.
             """,
             
             AgentRole.STEWARDSHIP: f"""
@@ -620,18 +768,13 @@ This case has gone through {case_state.iteration} iterations. Focus on decisive 
             4. **Cost Optimization:** Before finalizing a test, check Dr. Stewardship's input. If a diagnostically equivalent but cheaper alternative is available, select it.
             5. **Default to Questions:** If no test meets the criteria or the budget is a major concern, select the most pertinent question to ask.
 
-            **CRITICAL: YOUR RESPONSE MUST BE EXACTLY THIS JSON FORMAT:**
-            {{
-                "action_type": "ask" | "test" | "diagnose",
-                "content": "specific question(s), test name(s), or final diagnosis",
-                "reasoning": "clear justification synthesizing panel input and citing decision framework step"
-            }}
-
+            **IMPORTANT: You MUST use the make_consensus_decision function to provide your structured response. Call this function with the appropriate action_type, content, and reasoning parameters.**
+            
             For action_type "ask": content should be specific patient history or physical exam questions
             For action_type "test": content should be properly named diagnostic tests (up to 3)
             For action_type "diagnose": content should be the complete, specific final diagnosis
 
-            Make the decision that best advances accurate, cost-effective diagnosis. Use your full token allocation for comprehensive reasoning in the reasoning field.
+            Make the decision that best advances accurate, cost-effective diagnosis. Use comprehensive reasoning that synthesizes all panel input and cites the specific decision framework step you're following.
             """,
             
             AgentRole.GATEKEEPER: f"""
@@ -1350,7 +1493,7 @@ NO SYSTEM MESSAGES, NO WRAPPER FORMAT. JUST THE JSON.
         # Initialize structured deliberation state instead of conversational chaining
         deliberation_state = DeliberationState()
         
-        # Prepare comprehensive but concise case context for each agent
+        # Prepare concise case context for each agent (token-optimized)
         remaining_budget = self.initial_budget - case_state.cumulative_cost
         budget_status = (
             "EXCEEDED"
@@ -1358,7 +1501,7 @@ NO SYSTEM MESSAGES, NO WRAPPER FORMAT. JUST THE JSON.
             else f"${remaining_budget:,}"
         )
 
-        # Base context for all agents (token-efficient)
+        # Full context - let agents self-regulate based on token guidance
         base_context = f"""
 === DIAGNOSTIC CASE STATUS - ROUND {case_state.iteration} ===
 
@@ -1406,34 +1549,50 @@ CURRENT STATE:
             # Dr. Hypothesis - Differential diagnosis and probability assessment
             logger.info("🧠 Dr. Hypothesis analyzing differential diagnosis...")
             hypothesis_prompt = self._get_prompt_for_role(AgentRole.HYPOTHESIS, case_state) + "\n\n" + base_context
-            deliberation_state.hypothesis_analysis = self.agents[AgentRole.HYPOTHESIS].run(hypothesis_prompt)
+            hypothesis_response = self._safe_agent_run(
+                self.agents[AgentRole.HYPOTHESIS], hypothesis_prompt, agent_role=AgentRole.HYPOTHESIS
+            )
             
-            # Update case state with new differential
-            self._update_differential_from_hypothesis(case_state, deliberation_state.hypothesis_analysis)
+            # Update case state with new differential (supports both function calls and text)
+            self._update_differential_from_hypothesis(case_state, hypothesis_response)
+            
+            # Store the analysis for deliberation state (convert to text format for other agents)
+            if hasattr(hypothesis_response, 'content'):
+                deliberation_state.hypothesis_analysis = hypothesis_response.content
+            else:
+                deliberation_state.hypothesis_analysis = str(hypothesis_response)
 
             # Dr. Test-Chooser - Information value optimization
             logger.info("🔬 Dr. Test-Chooser selecting optimal tests...")
             test_chooser_prompt = self._get_prompt_for_role(AgentRole.TEST_CHOOSER, case_state) + "\n\n" + base_context
             if self.mode == "question_only":
                 test_chooser_prompt += "\n\nIMPORTANT: This is QUESTION-ONLY mode. You may ONLY recommend patient questions, not diagnostic tests."
-            deliberation_state.test_chooser_analysis = self.agents[AgentRole.TEST_CHOOSER].run(test_chooser_prompt)
+            deliberation_state.test_chooser_analysis = self._safe_agent_run(
+                self.agents[AgentRole.TEST_CHOOSER], test_chooser_prompt, agent_role=AgentRole.TEST_CHOOSER
+            )
 
             # Dr. Challenger - Bias identification and alternative hypotheses
             logger.info("🤔 Dr. Challenger challenging assumptions...")
             challenger_prompt = self._get_prompt_for_role(AgentRole.CHALLENGER, case_state) + "\n\n" + base_context
-            deliberation_state.challenger_analysis = self.agents[AgentRole.CHALLENGER].run(challenger_prompt)
+            deliberation_state.challenger_analysis = self._safe_agent_run(
+                self.agents[AgentRole.CHALLENGER], challenger_prompt, agent_role=AgentRole.CHALLENGER
+            )
 
             # Dr. Stewardship - Cost-effectiveness analysis
             logger.info("💰 Dr. Stewardship evaluating cost-effectiveness...")
             stewardship_prompt = self._get_prompt_for_role(AgentRole.STEWARDSHIP, case_state) + "\n\n" + base_context
             if self.enable_budget_tracking:
                 stewardship_prompt += f"\n\nBUDGET TRACKING ENABLED - Current cost: ${case_state.cumulative_cost}, Remaining: ${remaining_budget}"
-            deliberation_state.stewardship_analysis = self.agents[AgentRole.STEWARDSHIP].run(stewardship_prompt)
+            deliberation_state.stewardship_analysis = self._safe_agent_run(
+                self.agents[AgentRole.STEWARDSHIP], stewardship_prompt, agent_role=AgentRole.STEWARDSHIP
+            )
 
             # Dr. Checklist - Quality assurance
             logger.info("✅ Dr. Checklist performing quality control...")
             checklist_prompt = self._get_prompt_for_role(AgentRole.CHECKLIST, case_state) + "\n\n" + base_context
-            deliberation_state.checklist_analysis = self.agents[AgentRole.CHECKLIST].run(checklist_prompt)
+            deliberation_state.checklist_analysis = self._safe_agent_run(
+                self.agents[AgentRole.CHECKLIST], checklist_prompt, agent_role=AgentRole.CHECKLIST
+            )
 
             # Consensus Coordinator - Final decision synthesis using structured state
             logger.info("🤝 Consensus Coordinator synthesizing panel decision...")
@@ -1445,11 +1604,8 @@ CURRENT STATE:
             if self.mode == "budgeted" and remaining_budget <= 0:
                 consensus_prompt += "\n\nBUDGET CONSTRAINT: Budget exceeded - must either ask questions or provide final diagnosis."
 
-            # Use improved JSON parsing with retry logic
-            action_dict = self._parse_json_with_retry(
-                self.agents[AgentRole.CONSENSUS], 
-                consensus_prompt
-            )
+            # Use function calling with retry logic for robust structured output
+            action_dict = self._get_consensus_with_retry(consensus_prompt)
 
             # Validate action based on mode constraints
             action = Action(**action_dict)
@@ -1497,19 +1653,52 @@ CURRENT STATE:
         
         return " | ".join(context_parts) if context_parts else ""
     
-    def _update_differential_from_hypothesis(self, case_state: CaseState, hypothesis_analysis: str):
-        """Extract and update differential diagnosis from Dr. Hypothesis analysis"""
+    def _update_differential_from_hypothesis(self, case_state: CaseState, hypothesis_response):
+        """Extract and update differential diagnosis from Dr. Hypothesis analysis - now supports both function calls and text"""
         try:
+            # Try to extract structured data from function call first
+            if hasattr(hypothesis_response, '__dict__') or isinstance(hypothesis_response, dict):
+                structured_data = self._extract_function_call_output(hypothesis_response)
+                
+                # Check if we got structured differential data
+                if "differential_diagnoses" in structured_data:
+                    # Update case state with structured data
+                    new_differential = {}
+                    for dx in structured_data["differential_diagnoses"]:
+                        new_differential[dx["diagnosis"]] = dx["probability"]
+                    
+                    case_state.update_differential(new_differential)
+                    
+                    # Update the main differential for backward compatibility
+                    summary = structured_data.get("summary", "Differential diagnosis updated")
+                    dx_text = f"{summary}\n\nTop Diagnoses:\n"
+                    for dx in structured_data["differential_diagnoses"]:
+                        dx_text += f"- {dx['diagnosis']}: {dx['probability']:.0%} - {dx['rationale']}\n"
+                    
+                    if "key_evidence" in structured_data:
+                        dx_text += f"\nKey Evidence: {structured_data['key_evidence']}"
+                    if "contradictory_evidence" in structured_data:
+                        dx_text += f"\nContradictory Evidence: {structured_data['contradictory_evidence']}"
+                        
+                    self.differential_diagnosis = dx_text
+                    logger.debug(f"Updated differential from function call: {new_differential}")
+                    return
+            
+            # Fallback to text-based extraction
+            hypothesis_text = str(hypothesis_response)
+            if hasattr(hypothesis_response, 'content'):
+                hypothesis_text = hypothesis_response.content
+                
             # Simple extraction - look for percentage patterns in the text
             import re
             
             # Update the main differential diagnosis for backward compatibility
-            self.differential_diagnosis = hypothesis_analysis
+            self.differential_diagnosis = hypothesis_text
             
             # Try to extract structured probabilities
             # Look for patterns like "Diagnosis: 85%" or "Disease (70%)"
             percentage_pattern = r'([A-Za-z][^:(\n]*?)[\s:]*[\(]?(\d{1,3})%[\)]?'
-            matches = re.findall(percentage_pattern, hypothesis_analysis)
+            matches = re.findall(percentage_pattern, hypothesis_text)
             
             new_differential = {}
             for match in matches:
@@ -1520,12 +1709,15 @@ CURRENT STATE:
             
             if new_differential:
                 case_state.update_differential(new_differential)
-                logger.debug(f"Updated differential: {new_differential}")
+                logger.debug(f"Updated differential from text parsing: {new_differential}")
                 
         except Exception as e:
             logger.debug(f"Could not extract structured differential: {e}")
             # Still update the text version for display
-            self.differential_diagnosis = hypothesis_analysis
+            hypothesis_text = str(hypothesis_response)
+            if hasattr(hypothesis_response, 'content'):
+                hypothesis_text = hypothesis_response.content
+            self.differential_diagnosis = hypothesis_text
     
     def _validate_and_correct_action(self, action: Action, case_state: CaseState, remaining_budget: int) -> Action:
         """Validate and correct actions based on mode constraints and context"""
@@ -1543,11 +1735,17 @@ CURRENT STATE:
             action.content = case_state.get_leading_diagnosis()
             action.reasoning = "Budget constraint: insufficient funds for additional testing"
         
-        # Stagnation handling
+        # Stagnation handling - ensure we have a valid diagnosis
         if case_state.is_stagnating(action):
             logger.warning("Stagnation detected, forcing diagnostic decision")
             action.action_type = "diagnose"
-            action.content = case_state.get_leading_diagnosis()
+            leading_diagnosis = case_state.get_leading_diagnosis()
+            # Ensure the diagnosis is meaningful, not corrupted
+            if leading_diagnosis == "No diagnosis formulated" or len(leading_diagnosis) < 10 or any(char in leading_diagnosis for char in ['x10^9', '–', '40–']):
+                # Use a fallback diagnosis based on the case context
+                action.content = "Unable to establish definitive diagnosis - further evaluation needed"
+            else:
+                action.content = leading_diagnosis
             action.reasoning = "Forced diagnosis due to detected stagnation in diagnostic process"
         
         # High confidence threshold
@@ -1583,7 +1781,7 @@ CURRENT STATE:
         {request}
         """
 
-        response = gatekeeper.run(prompt)
+        response = self._safe_agent_run(gatekeeper, prompt, agent_role=AgentRole.GATEKEEPER)
         return response
 
     def _judge_diagnosis(
@@ -1600,7 +1798,7 @@ CURRENT STATE:
         Score: [number from 1-5]
         Justification: [detailed reasoning for the score]
         """
-        response = judge.run(prompt)
+        response = self._safe_agent_run(judge, prompt, agent_role=AgentRole.JUDGE)
         
         # Handle different response types from swarms Agent
         response_text = ""
@@ -2013,7 +2211,10 @@ CURRENT STATE:
                 print_on=True,  # Enable printing for aggregator agent
             )
 
-            return aggregator.run(aggregator_prompt).strip()
+            agg_resp = self._safe_agent_run(aggregator, aggregator_prompt)
+            if hasattr(agg_resp, "content"):
+                return agg_resp.content.strip()
+            return str(agg_resp).strip()
 
         except Exception as e:
             logger.error(f"Error in ensemble aggregation: {e}")
@@ -2072,8 +2273,282 @@ CURRENT STATE:
 
         config = variant_configs[variant]
         config.update(kwargs)  # Allow overrides
+        
+        # Remove 'budget' parameter if present, as it's mapped to 'initial_budget'
+        config.pop('budget', None)
 
         return cls(**config)
+
+    # ------------------------------------------------------------------
+    # Helper utilities – throttling & robust JSON parsing
+    # ------------------------------------------------------------------
+
+    def _safe_agent_run(
+        self,
+        agent: "Agent",  # type: ignore – forward reference
+        prompt: str,
+        retries: int = 3,
+        agent_role: AgentRole = None,
+    ) -> Any:
+        """Safely call `agent.run` while respecting OpenAI rate-limits.
+
+        Features:
+        1.  Estimates token usage and provides guidance to agents for self-regulation
+        2.  Applies progressive delays to respect rate limits
+        3.  Lets agents dynamically adjust their response strategy based on token constraints
+        """
+
+        # Get agent role for token calculations
+        if agent_role is None:
+            agent_role = AgentRole.CONSENSUS  # Default fallback
+
+        # Estimate total tokens in the request
+        estimated_input_tokens = self._estimate_tokens(prompt)
+        max_output_tokens = self._get_agent_max_tokens(agent_role)
+        total_estimated_tokens = estimated_input_tokens + max_output_tokens
+        
+        # Add dynamic token guidance to the prompt instead of truncating
+        token_guidance = self._generate_token_guidance(
+            estimated_input_tokens, max_output_tokens, total_estimated_tokens, agent_role
+        )
+        
+        # Prepend token guidance to prompt
+        enhanced_prompt = f"{token_guidance}\n\n{prompt}"
+        
+        logger.debug(f"Agent {agent_role.value}: Input={estimated_input_tokens}, Output={max_output_tokens}, Total={total_estimated_tokens}")
+
+        # Increased base delay for better rate limit compliance
+        base_delay = max(self.request_delay, 5.0)  # Minimum 5 seconds between requests
+
+        for attempt in range(retries + 1):
+            # Progressive delay: 5s, 15s, 45s, 135s
+            current_delay = base_delay * (3 ** attempt) if attempt > 0 else base_delay
+            
+            logger.info(f"Request attempt {attempt + 1}/{retries + 1}, waiting {current_delay:.1f}s...")
+            time.sleep(current_delay)
+
+            try:
+                return agent.run(enhanced_prompt)
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "rate_limit" in err_msg or "ratelimiterror" in err_msg or "429" in str(e):
+                    logger.warning(
+                        f"Rate-limit encountered (attempt {attempt + 1}/{retries + 1}). "
+                        f"Will retry after {base_delay * (3 ** (attempt + 1)):.1f}s..."
+                    )
+                    continue  # Next retry applies longer delay
+                # For non-rate-limit errors, propagate immediately
+                raise
+
+        # All retries exhausted
+        raise RuntimeError("Maximum retries exceeded for agent.run – aborting call")
+
+    def _robust_parse_action(self, raw_response: str) -> Dict[str, Any]:
+        """Extract a JSON *action* object from `raw_response`.
+
+        The function tries multiple strategies and finally returns a default
+        *ask* action if no valid JSON can be located.
+        """
+
+        import json, re
+
+        # Strip common markdown fences
+        if raw_response.strip().startswith("```"):
+            segments = raw_response.split("```")
+            for seg in segments:
+                seg = seg.strip()
+                if seg.startswith("{") and seg.endswith("}"):
+                    raw_response = seg
+                    break
+
+        # 1) Fast path – direct JSON decode
+        try:
+            data = json.loads(raw_response)
+            if isinstance(data, dict) and "action_type" in data:
+                return data
+        except Exception:
+            pass
+
+        # 2) Regex search for the first balanced curly block
+        match = re.search(r"\{[\s\S]*?\}", raw_response)
+        if match:
+            candidate = match.group(0)
+            # Remove leading drawing characters (e.g., table borders)
+            candidate = "\n".join(line.lstrip("│| ").rstrip("│| ") for line in candidate.splitlines())
+            try:
+                data = json.loads(candidate)
+                if isinstance(data, dict) and "action_type" in data:
+                    return data
+            except Exception:
+                pass
+
+        logger.error("Failed to parse a valid action JSON. Falling back to default ask action")
+        return {
+            "action_type": "ask",
+            "content": "Could you please clarify the next best step? The previous analysis was inconclusive.",
+            "reasoning": "Fallback generated due to JSON parsing failure.",
+        }
+
+    def _extract_function_call_output(self, agent_response) -> Dict[str, Any]:
+        """Extract structured output from agent function call response.
+        
+        This method handles the swarms Agent response format when using function calling.
+        The response should contain tool calls with the structured data.
+        """
+        try:
+            # Handle different response formats from swarms Agent
+            if isinstance(agent_response, dict):
+                # Check for tool calls in the response
+                if "tool_calls" in agent_response and agent_response["tool_calls"]:
+                    tool_call = agent_response["tool_calls"][0]  # Get first tool call
+                    if "function" in tool_call and "arguments" in tool_call["function"]:
+                        arguments = tool_call["function"]["arguments"]
+                        if isinstance(arguments, str):
+                            # Parse JSON string arguments
+                            import json
+                            arguments = json.loads(arguments)
+                        return arguments
+                
+                # Check for direct arguments in response
+                if "arguments" in agent_response:
+                    arguments = agent_response["arguments"]
+                    if isinstance(arguments, str):
+                        import json
+                        arguments = json.loads(arguments)
+                    return arguments
+                    
+                # Check if response itself has the expected structure
+                if all(key in agent_response for key in ["action_type", "content", "reasoning"]):
+                    return {
+                        "action_type": agent_response["action_type"],
+                        "content": agent_response["content"], 
+                        "reasoning": agent_response["reasoning"]
+                    }
+            
+            # Handle Agent object response
+            elif hasattr(agent_response, "__dict__"):
+                # Check for tool_calls attribute
+                if hasattr(agent_response, "tool_calls") and agent_response.tool_calls:
+                    tool_call = agent_response.tool_calls[0]
+                    if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+                        arguments = tool_call.function.arguments
+                        if isinstance(arguments, str):
+                            import json
+                            arguments = json.loads(arguments)
+                        return arguments
+                
+                # Check for direct function call response
+                if hasattr(agent_response, "function_call"):
+                    function_call = agent_response.function_call
+                    if hasattr(function_call, "arguments"):
+                        arguments = function_call.arguments
+                        if isinstance(arguments, str):
+                            import json
+                            arguments = json.loads(arguments)
+                        return arguments
+                        
+                # Try to extract from response content
+                if hasattr(agent_response, "content"):
+                    content = agent_response.content
+                    if isinstance(content, dict) and all(key in content for key in ["action_type", "content", "reasoning"]):
+                        return content
+            
+            # Handle string response (fallback to regex parsing)
+            elif isinstance(agent_response, str):
+                # Try to parse as JSON first
+                try:
+                    import json
+                    parsed = json.loads(agent_response)
+                    if isinstance(parsed, dict) and all(key in parsed for key in ["action_type", "content", "reasoning"]):
+                        return parsed
+                except:
+                    pass
+                
+                # Fallback to regex extraction
+                import re
+                action_type_match = re.search(r'"action_type":\s*"(ask|test|diagnose)"', agent_response, re.IGNORECASE)
+                content_match = re.search(r'"content":\s*"([^"]+)"', agent_response, re.IGNORECASE | re.DOTALL)
+                reasoning_match = re.search(r'"reasoning":\s*"([^"]+)"', agent_response, re.IGNORECASE | re.DOTALL)
+                
+                if action_type_match and content_match and reasoning_match:
+                    return {
+                        "action_type": action_type_match.group(1).lower(),
+                        "content": content_match.group(1).strip(),
+                        "reasoning": reasoning_match.group(1).strip()
+                    }
+            
+            logger.warning(f"Could not extract function call output from response type: {type(agent_response)}")
+            logger.debug(f"Response content: {str(agent_response)[:500]}...")
+            
+        except Exception as e:
+            logger.error(f"Error extracting function call output: {e}")
+            logger.debug(f"Response: {str(agent_response)[:500]}...")
+        
+        # Final fallback
+        return {
+            "action_type": "ask",
+            "content": "Could you please provide more information to help guide the next diagnostic step?",
+            "reasoning": "Fallback action due to function call parsing error."
+        }
+
+    def _get_consensus_with_retry(self, consensus_prompt: str, max_retries: int = 2) -> Dict[str, Any]:
+        """Get consensus decision with function call retry logic."""
+        
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt == 0:
+                    # First attempt - use original prompt
+                    response = self._safe_agent_run(
+                        self.agents[AgentRole.CONSENSUS], consensus_prompt, agent_role=AgentRole.CONSENSUS
+                    )
+                else:
+                    # Retry with explicit function call instruction
+                    retry_prompt = f"""
+{consensus_prompt}
+
+**CRITICAL: RETRY ATTEMPT {attempt}**
+Your previous response failed to use the required `make_consensus_decision` function. 
+You MUST call the make_consensus_decision function with the appropriate parameters:
+- action_type: "ask", "test", or "diagnose"
+- content: specific question, test name, or diagnosis
+- reasoning: your detailed reasoning
+
+Please try again and ensure you call the function correctly.
+"""
+                    response = self._safe_agent_run(
+                        self.agents[AgentRole.CONSENSUS], retry_prompt, agent_role=AgentRole.CONSENSUS
+                    )
+                
+                logger.debug(f"Consensus attempt {attempt + 1}, response type: {type(response)}")
+                
+                # Try to extract function call output
+                action_dict = self._extract_function_call_output(response)
+                
+                # Check if we got a valid response (not a fallback)
+                if not action_dict.get("reasoning", "").startswith("Fallback action due to function call parsing error"):
+                    logger.debug(f"Consensus function call successful on attempt {attempt + 1}")
+                    return action_dict
+                
+                logger.warning(f"Function call failed on attempt {attempt + 1}, will retry")
+                
+            except Exception as e:
+                logger.error(f"Error in consensus attempt {attempt + 1}: {e}")
+                
+        # Final fallback to JSON parsing if all function call attempts failed
+        logger.warning("All function call attempts failed, falling back to JSON parsing")
+        try:
+            # Use the last response and try JSON parsing
+            consensus_text = (
+                response.content if hasattr(response, "content") else str(response)
+            )
+            return self._robust_parse_action(consensus_text)
+        except Exception as e:
+            logger.error(f"Both function calling and JSON parsing failed: {e}")
+            return {
+                "action_type": "ask",
+                "content": "Could you please provide more information to guide the diagnostic process?",
+                "reasoning": f"Final fallback after {max_retries + 1} function call attempts and JSON parsing failure."
+            }
 
 
 def run_mai_dxo_demo(
@@ -2129,13 +2604,13 @@ def run_mai_dxo_demo(
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant,
                     budget=3000,
-                    model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
+                    model_name="gpt-4.1",  # Fixed: Use valid model name
                     max_iterations=5,
                 )
             else:
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant,
-                    model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
+                    model_name="gpt-4.1",  # Fixed: Use valid model name
                     max_iterations=5,
                 )
 
@@ -2151,159 +2626,159 @@ def run_mai_dxo_demo(
     return results
 
 
-if __name__ == "__main__":
-    # Example case inspired by the paper's Figure 1
-    initial_info = (
-        "A 29-year-old woman was admitted to the hospital because of sore throat and peritonsillar swelling "
-        "and bleeding. Symptoms did not abate with antimicrobial therapy."
-    )
+# if __name__ == "__main__":
+#     # Example case inspired by the paper's Figure 1
+#     initial_info = (
+#         "A 29-year-old woman was admitted to the hospital because of sore throat and peritonsillar swelling "
+#         "and bleeding. Symptoms did not abate with antimicrobial therapy."
+#     )
 
-    full_case = """
-    Patient: 29-year-old female.
-    History: Onset of sore throat 7 weeks prior to admission. Worsening right-sided pain and swelling.
-    No fevers, headaches, or gastrointestinal symptoms. Past medical history is unremarkable. No history of smoking or significant alcohol use.
-    Physical Exam: Right peritonsillar mass, displacing the uvula. No other significant findings.
-    Initial Labs: FBC, clotting studies normal.
-    MRI Neck: Showed a large, enhancing mass in the right peritonsillar space.
-    Biopsy (H&E): Infiltrative round-cell neoplasm with high nuclear-to-cytoplasmic ratio and frequent mitotic figures.
-    Biopsy (Immunohistochemistry for Carcinoma): CD31, D2-40, CD34, ERG, GLUT-1, pan-cytokeratin, CD45, CD20, CD3 all negative. Ki-67: 60% nuclear positivity.
-    Biopsy (Immunohistochemistry for Rhabdomyosarcoma): Desmin and MyoD1 diffusely positive. Myogenin multifocally positive.
-    Biopsy (FISH): No FOXO1 (13q14) rearrangements detected.
-    Final Diagnosis from Pathology: Embryonal rhabdomyosarcoma of the pharynx.
-    """
+#     full_case = """
+#     Patient: 29-year-old female.
+#     History: Onset of sore throat 7 weeks prior to admission. Worsening right-sided pain and swelling.
+#     No fevers, headaches, or gastrointestinal symptoms. Past medical history is unremarkable. No history of smoking or significant alcohol use.
+#     Physical Exam: Right peritonsillar mass, displacing the uvula. No other significant findings.
+#     Initial Labs: FBC, clotting studies normal.
+#     MRI Neck: Showed a large, enhancing mass in the right peritonsillar space.
+#     Biopsy (H&E): Infiltrative round-cell neoplasm with high nuclear-to-cytoplasmic ratio and frequent mitotic figures.
+#     Biopsy (Immunohistochemistry for Carcinoma): CD31, D2-40, CD34, ERG, GLUT-1, pan-cytokeratin, CD45, CD20, CD3 all negative. Ki-67: 60% nuclear positivity.
+#     Biopsy (Immunohistochemistry for Rhabdomyosarcoma): Desmin and MyoD1 diffusely positive. Myogenin multifocally positive.
+#     Biopsy (FISH): No FOXO1 (13q14) rearrangements detected.
+#     Final Diagnosis from Pathology: Embryonal rhabdomyosarcoma of the pharynx.
+#     """
 
-    ground_truth = "Embryonal rhabdomyosarcoma of the pharynx"
+#     ground_truth = "Embryonal rhabdomyosarcoma of the pharynx"
 
-    # --- Demonstrate Different MAI-DxO Variants ---
-    try:
-        print("\n" + "=" * 80)
-        print(
-            "    MAI DIAGNOSTIC ORCHESTRATOR (MAI-DxO) - SEQUENTIAL DIAGNOSIS BENCHMARK"
-        )
-        print(
-            "                    Implementation based on the NEJM Research Paper"
-        )
-        print("=" * 80)
+#     # --- Demonstrate Different MAI-DxO Variants ---
+#     try:
+#         print("\n" + "=" * 80)
+#         print(
+#             "    MAI DIAGNOSTIC ORCHESTRATOR (MAI-DxO) - SEQUENTIAL DIAGNOSIS BENCHMARK"
+#         )
+#         print(
+#             "                    Implementation based on the NEJM Research Paper"
+#         )
+#         print("=" * 80)
 
-        # Test different variants as described in the paper
-        variants_to_test = [
-            (
-                "no_budget",
-                "Standard MAI-DxO with no budget constraints",
-            ),
-            ("budgeted", "Budget-constrained MAI-DxO ($3000 limit)"),
-            (
-                "question_only",
-                "Question-only variant (no diagnostic tests)",
-            ),
-        ]
+#         # Test different variants as described in the paper
+#         variants_to_test = [
+#             (
+#                 "no_budget",
+#                 "Standard MAI-DxO with no budget constraints",
+#             ),
+#             ("budgeted", "Budget-constrained MAI-DxO ($3000 limit)"),
+#             (
+#                 "question_only",
+#                 "Question-only variant (no diagnostic tests)",
+#             ),
+#         ]
 
-        results = {}
+#         results = {}
 
-        for variant_name, description in variants_to_test:
-            print(f"\n{'='*60}")
-            print(f"Testing Variant: {variant_name.upper()}")
-            print(f"Description: {description}")
-            print("=" * 60)
+#         for variant_name, description in variants_to_test:
+#             print(f"\n{'='*60}")
+#             print(f"Testing Variant: {variant_name.upper()}")
+#             print(f"Description: {description}")
+#             print("=" * 60)
 
-            # Create the variant
-            if variant_name == "budgeted":
-                orchestrator = MaiDxOrchestrator.create_variant(
-                    variant_name,
-                    budget=3000,
-                    model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
-                    max_iterations=5,
-                )
-            else:
-                orchestrator = MaiDxOrchestrator.create_variant(
-                    variant_name,
-                    model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
-                    max_iterations=5,
-                )
+#             # Create the variant
+#             if variant_name == "budgeted":
+#                 orchestrator = MaiDxOrchestrator.create_variant(
+#                     variant_name,
+#                     budget=3000,
+#                     model_name="gpt-4.1",  # Fixed: Use valid model name
+#                     max_iterations=5,
+#                 )
+#             else:
+#                 orchestrator = MaiDxOrchestrator.create_variant(
+#                     variant_name,
+#                     model_name="gpt-4.1",  # Fixed: Use valid model name
+#                     max_iterations=5,
+#                 )
 
-            # Run the diagnostic process
-            result = orchestrator.run(
-                initial_case_info=initial_info,
-                full_case_details=full_case,
-                ground_truth_diagnosis=ground_truth,
-            )
+#             # Run the diagnostic process
+#             result = orchestrator.run(
+#                 initial_case_info=initial_info,
+#                 full_case_details=full_case,
+#                 ground_truth_diagnosis=ground_truth,
+#             )
 
-            results[variant_name] = result
+#             results[variant_name] = result
 
-            # Display results
-            print(f"\n🚀 Final Diagnosis: {result.final_diagnosis}")
-            print(f"🎯 Ground Truth: {result.ground_truth}")
-            print(f"⭐ Accuracy Score: {result.accuracy_score}/5.0")
-            print(f"   Reasoning: {result.accuracy_reasoning}")
-            print(f"💰 Total Cost: ${result.total_cost:,}")
-            print(f"🔄 Iterations: {result.iterations}")
-            print(f"⏱️  Mode: {orchestrator.mode}")
+#             # Display results
+#             print(f"\n🚀 Final Diagnosis: {result.final_diagnosis}")
+#             print(f"🎯 Ground Truth: {result.ground_truth}")
+#             print(f"⭐ Accuracy Score: {result.accuracy_score}/5.0")
+#             print(f"   Reasoning: {result.accuracy_reasoning}")
+#             print(f"💰 Total Cost: ${result.total_cost:,}")
+#             print(f"🔄 Iterations: {result.iterations}")
+#             print(f"⏱️  Mode: {orchestrator.mode}")
 
-        # Demonstrate ensemble approach
-        print(f"\n{'='*60}")
-        print("Testing Variant: ENSEMBLE")
-        print(
-            "Description: Multiple independent runs with consensus aggregation"
-        )
-        print("=" * 60)
+#         # Demonstrate ensemble approach
+#         print(f"\n{'='*60}")
+#         print("Testing Variant: ENSEMBLE")
+#         print(
+#             "Description: Multiple independent runs with consensus aggregation"
+#         )
+#         print("=" * 60)
 
-        ensemble_orchestrator = MaiDxOrchestrator.create_variant(
-            "ensemble",
-            model_name="gpt-4-1106-preview",  # Fixed: Use valid model name
-            max_iterations=3,  # Shorter iterations for ensemble
-        )
+#         ensemble_orchestrator = MaiDxOrchestrator.create_variant(
+#             "ensemble",
+#             model_name="gpt-4.1",  # Fixed: Use valid model name
+#             max_iterations=3,  # Shorter iterations for ensemble
+#         )
 
-        ensemble_result = ensemble_orchestrator.run_ensemble(
-            initial_case_info=initial_info,
-            full_case_details=full_case,
-            ground_truth_diagnosis=ground_truth,
-            num_runs=2,  # Reduced for demo
-        )
+#         ensemble_result = ensemble_orchestrator.run_ensemble(
+#             initial_case_info=initial_info,
+#             full_case_details=full_case,
+#             ground_truth_diagnosis=ground_truth,
+#             num_runs=2,  # Reduced for demo
+#         )
 
-        results["ensemble"] = ensemble_result
+#         results["ensemble"] = ensemble_result
 
-        print(
-            f"\n🚀 Ensemble Diagnosis: {ensemble_result.final_diagnosis}"
-        )
-        print(f"🎯 Ground Truth: {ensemble_result.ground_truth}")
-        print(
-            f"⭐ Ensemble Score: {ensemble_result.accuracy_score}/5.0"
-        )
-        print(
-            f"💰 Total Ensemble Cost: ${ensemble_result.total_cost:,}"
-        )
+#         print(
+#             f"\n🚀 Ensemble Diagnosis: {ensemble_result.final_diagnosis}"
+#         )
+#         print(f"🎯 Ground Truth: {ensemble_result.ground_truth}")
+#         print(
+#             f"⭐ Ensemble Score: {ensemble_result.accuracy_score}/5.0"
+#         )
+#         print(
+#             f"💰 Total Ensemble Cost: ${ensemble_result.total_cost:,}"
+#         )
 
-        # --- Summary Comparison ---
-        print(f"\n{'='*80}")
-        print("                           RESULTS SUMMARY")
-        print("=" * 80)
-        print(
-            f"{'Variant':<15} {'Diagnosis Match':<15} {'Score':<8} {'Cost':<12} {'Iterations':<12}"
-        )
-        print("-" * 80)
+#         # --- Summary Comparison ---
+#         print(f"\n{'='*80}")
+#         print("                           RESULTS SUMMARY")
+#         print("=" * 80)
+#         print(
+#             f"{'Variant':<15} {'Diagnosis Match':<15} {'Score':<8} {'Cost':<12} {'Iterations':<12}"
+#         )
+#         print("-" * 80)
 
-        for variant_name, result in results.items():
-            match_status = (
-                "✓ Match"
-                if result.accuracy_score >= 4.0
-                else "✗ No Match"
-            )
-            print(
-                f"{variant_name:<15} {match_status:<15} {result.accuracy_score:<8.1f} ${result.total_cost:<11,} {result.iterations:<12}"
-            )
+#         for variant_name, result in results.items():
+#             match_status = (
+#                 "✓ Match"
+#                 if result.accuracy_score >= 4.0
+#                 else "✗ No Match"
+#             )
+#             print(
+#                 f"{variant_name:<15} {match_status:<15} {result.accuracy_score:<8.1f} ${result.total_cost:<11,} {result.iterations:<12}"
+#             )
 
-        print(f"\n{'='*80}")
-        print(
-            "Implementation successfully demonstrates the MAI-DxO framework"
-        )
-        print(
-            "as described in 'Sequential Diagnosis with Language Models' paper"
-        )
-        print("=" * 80)
+#         print(f"\n{'='*80}")
+#         print(
+#             "Implementation successfully demonstrates the MAI-DxO framework"
+#         )
+#         print(
+#             "as described in 'Sequential Diagnosis with Language Models' paper"
+#         )
+#         print("=" * 80)
 
-    except Exception as e:
-        logger.exception(
-            f"An error occurred during the diagnostic session: {e}"
-        )
-        print(f"\n❌ Error occurred: {e}")
-        print("Please check your model configuration and API keys.")
+#     except Exception as e:
+#         logger.exception(
+#             f"An error occurred during the diagnostic session: {e}"
+#         )
+#         print(f"\n❌ Error occurred: {e}")
+#         print("Please check your model configuration and API keys.")
