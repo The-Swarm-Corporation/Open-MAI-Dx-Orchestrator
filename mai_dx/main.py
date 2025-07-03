@@ -35,10 +35,10 @@ import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Union, Literal
+from typing import Any, Dict, List, Union, Literal, Optional
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from swarms import Agent, Conversation
 from dotenv import load_dotenv
 
@@ -239,6 +239,36 @@ class Action(BaseModel):
     reasoning: str = Field(
         ..., description="The reasoning behind choosing this action."
     )
+
+
+# ------------------------------------------------------------------
+# Strongly-typed models for function-calling arguments (type safety)
+# ------------------------------------------------------------------
+
+
+class ConsensusArguments(BaseModel):
+    """Typed model for the `make_consensus_decision` function call."""
+
+    action_type: Literal["ask", "test", "diagnose"]
+    content: Union[str, List[str]]
+    reasoning: str
+
+
+class DifferentialDiagnosisItem(BaseModel):
+    """Single differential diagnosis item returned by Dr. Hypothesis."""
+
+    diagnosis: str
+    probability: float
+    rationale: str
+
+
+class HypothesisArguments(BaseModel):
+    """Typed model for the `update_differential_diagnosis` function call."""
+
+    summary: str
+    differential_diagnoses: List[DifferentialDiagnosisItem]
+    key_evidence: str
+    contradictory_evidence: Optional[str] = None
 
 
 # --- Main Orchestrator Class ---
@@ -1660,6 +1690,12 @@ CURRENT STATE:
             if hasattr(hypothesis_response, '__dict__') or isinstance(hypothesis_response, dict):
                 structured_data = self._extract_function_call_output(hypothesis_response)
                 
+                # Validate the structured data using the HypothesisArguments schema
+                try:
+                    _ = HypothesisArguments(**structured_data)
+                except ValidationError as e:
+                    logger.warning(f"HypothesisArguments validation failed: {e}")
+                
                 # Check if we got structured differential data
                 if "differential_diagnoses" in structured_data:
                     # Update case state with structured data
@@ -2523,6 +2559,13 @@ Please try again and ensure you call the function correctly.
                 
                 # Try to extract function call output
                 action_dict = self._extract_function_call_output(response)
+                
+                # Validate and enforce schema using ConsensusArguments for type safety
+                try:
+                    validated_args = ConsensusArguments(**action_dict)
+                    action_dict = validated_args.dict()
+                except ValidationError as e:
+                    logger.warning(f"ConsensusArguments validation failed: {e}")
                 
                 # Check if we got a valid response (not a fallback)
                 if not action_dict.get("reasoning", "").startswith("Fallback action due to function call parsing error"):
