@@ -255,7 +255,7 @@ class MaiDxOrchestrator:
 
     def __init__(
         self,
-        model_name: str = "gpt-4.1",  # Fixed: Use valid GPT-4 Turbo model name
+        model_name: str = "gpt-4o-mini",  # Fixed: Use valid GPT-4 Turbo model name
         max_iterations: int = 10,
         initial_budget: int = 10000,
         mode: str = "no_budget",  # "instant", "question_only", "budgeted", "no_budget", "ensemble"
@@ -2604,13 +2604,13 @@ def run_mai_dxo_demo(
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant,
                     budget=3000,
-                    model_name="gpt-4.1",  # Fixed: Use valid model name
+                    model_name="gemini/gemini-2.5-flash",  # Fixed: Use valid model name
                     max_iterations=5,
                 )
             else:
                 orchestrator = MaiDxOrchestrator.create_variant(
                     variant,
-                    model_name="gpt-4.1",  # Fixed: Use valid model name
+                    model_name="gemini/gemini-2.5-flash",  # Fixed: Use valid model name
                     max_iterations=5,
                 )
 
