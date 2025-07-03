@@ -33,6 +33,7 @@
 - **Robust Error Handling**: Comprehensive exception management and fallback mechanisms
 - **Beautiful Logging**: Structured logging with Loguru for debugging and monitoring
 - **Type Safety**: Full Pydantic models and type hints throughout
+- **Token-Optimized Prompts**: Compact, role-specific directives minimize token usage while preserving diagnostic quality
 
 ## 🏗 Architecture
 
