@@ -15,6 +15,7 @@ MAI-DxO (MAI Diagnostic Orchestrator) is a sophisticated AI-powered diagnostic s
 - **Cost Tracking**: Real-time budget monitoring with costs for 25+ medical tests.
 - **Clinical Evaluation**: 5-point accuracy scoring with detailed feedback.
 - **Model Agnostic**: Works with GPT, Gemini, Claude, and other leading LLMs.
+- **Token-Optimized Prompts**: Ultra-compact role prompts reduce token usage and latency without sacrificing reasoning quality.
 
 ## 🚀 Quick Start
 
